@@ -16,6 +16,28 @@
     />
   </head>
   <body class="bg-pinpic-bg-light dark:bg-pinpic-bg-dark text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark antialiased transition-colors duration-200">
+    <!-- SVG Color Matrix Filters: Maps OpenStreetMap raster tiles to Android app map theme (light.json & dark.json) -->
+    <svg style="position: fixed; top: 0; left: 0; width: 0; height: 0; pointer-events: none; opacity: 0;" aria-hidden="true">
+      <defs>
+        <!-- Light Theme: #f8f4f0 land, #b6d2ec water, #d8e8c8 park, #ffcc88 road -->
+        <filter id="osm-light-filter" color-interpolation-filters="sRGB">
+          <feColorMatrix type="matrix" values="
+            0.863  0.178 -0.004 0 -0.007
+           -0.028  0.933  0.105 0 -0.006
+           -0.573  0.665  0.911 0 -0.009
+            0      0      0     1  0" />
+        </filter>
+
+        <!-- Dark Theme: #0f0f0f land, #2d343b water, #1b1d19 park, #3f3322 road -->
+        <filter id="osm-dark-filter" color-interpolation-filters="sRGB">
+          <feColorMatrix type="matrix" values="
+            0.141 -0.908 -0.151 0  0.943
+           -0.046 -0.784 -0.089 0  0.942
+           -0.222 -0.768  0.070 0  0.940
+            0      0      0     1  0" />
+        </filter>
+      </defs>
+    </svg>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
