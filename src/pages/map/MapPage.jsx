@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Navigation, RefreshCw } from 'lucide-react';
+import { Plus, Navigation, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { userApi } from '../../api/userApi';
+import { photoApi } from '../../api/photoApi';
 import PinPicMapContainer from '../../components/map/PinPicMapContainer';
 import PinPicClusterMarker from '../../components/map/PinPicClusterMarker';
+import DroppedPinMarker from '../../components/map/DroppedPinMarker';
 import SelectedPhotoCard from '../../components/map/SelectedPhotoCard';
 import SelectedClusterSheet from '../../components/map/SelectedClusterSheet';
-import AddPhotoModal from '../../components/map/AddPhotoModal';
+import AddPhotoBottomSheet from '../../components/map/AddPhotoBottomSheet';
+import DatePickerModal from '../../components/map/DatePickerModal';
+import TimePickerModal from '../../components/map/TimePickerModal';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
 import LogoHeader from '../../components/common/LogoHeader';
 import MapClusteringSystem from '../../domain/map/MapClusteringSystem';
@@ -29,8 +33,17 @@ export const MapPage = () => {
   // Selection state
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedClusterDetail, setSelectedClusterDetail] = useState(null);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [clickedLocation, setClickedLocation] = useState(null);
+
+  // Add Photo 3-Step Flow state matching Android AddPhotoMode
+  const [addPhotoMode, setAddPhotoMode] = useState('NONE'); // 'NONE' | 'SELECT_LOCATION' | 'LOCATION_SELECTED' | 'PHOTOS_SELECTED'
+  const [selectedAddPhotoLocation, setSelectedAddPhotoLocation] = useState(null); // { lat, lng }
+  const [pendingPhotos, setPendingPhotos] = useState([]); // [{ file, previewUrl, name }]
+  const [dateText, setDateText] = useState('');
+  const [timeText, setTimeText] = useState('');
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [isTimePickerOpen, setIsTimePickerOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   // Fullscreen viewer
   const [fullScreenPhotos, setFullScreenPhotos] = useState([]);
@@ -81,6 +94,9 @@ export const MapPage = () => {
   }, []);
 
   const handleNodeClick = useCallback((node) => {
+    // If user is currently in add photo flow, do not intercept with node details
+    if (addPhotoMode !== 'NONE') return;
+
     setSelectedNode(node);
 
     // Expand leaf clusters from KD-tree hierarchy
@@ -112,19 +128,27 @@ export const MapPage = () => {
         photos,
       });
     }
-  }, []);
+  }, [addPhotoMode]);
 
   const handleLocateMe = () => {
     if (!navigator.geolocation) {
-      showToast('Geolocation is not supported', 'error');
+      showToast('Geolocation is not supported by your browser', 'error');
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
         setMapCenter({ lat: latitude, lng: longitude });
-        setMapZoom(14);
-        showToast('Moved to your location', 'info');
+        setMapZoom(15);
+
+        // If in add photo mode, set location to current GPS coords
+        if (addPhotoMode === 'SELECT_LOCATION' || addPhotoMode === 'LOCATION_SELECTED') {
+          setSelectedAddPhotoLocation({ lat: latitude, lng: longitude });
+          setAddPhotoMode('LOCATION_SELECTED');
+          showToast('Dropped pin at your current location', 'info');
+        } else {
+          showToast('Moved to your location', 'info');
+        }
       },
       (err) => {
         console.warn('Geolocation error:', err);
@@ -134,14 +158,181 @@ export const MapPage = () => {
   };
 
   const handleMapClick = (latlng) => {
-    setClickedLocation(latlng);
+    if (addPhotoMode === 'SELECT_LOCATION' || addPhotoMode === 'LOCATION_SELECTED') {
+      setSelectedAddPhotoLocation(latlng);
+      setAddPhotoMode('LOCATION_SELECTED');
+    } else if (addPhotoMode === 'PHOTOS_SELECTED') {
+      // Allow moving the pin even after photos are picked
+      setSelectedAddPhotoLocation(latlng);
+    } else {
+      setSelectedNode(null);
+      setSelectedClusterDetail(null);
+    }
   };
 
-  const handlePhotoUploaded = (newPhoto) => {
-    fetchAndIndexClusters();
-    if (newPhoto.location?.latitude && newPhoto.location?.longitude) {
-      setMapCenter({ lat: newPhoto.location.latitude, lng: newPhoto.location.longitude });
+  // Step 2 & Step 3: Handle photos selected from file picker
+  const handleSelectPhotos = (files) => {
+    if (!files || files.length === 0) return;
+
+    const newItems = files.map((file) => ({
+      file,
+      name: file.name.replace(/\.[^/.]+$/, ''),
+      previewUrl: URL.createObjectURL(file),
+    }));
+
+    setPendingPhotos((prev) => {
+      const isFirstSelection = prev.length === 0;
+
+      // Default Date (DD/MM/YYYY) and Time (hh:mm a) on first selection
+      if (isFirstSelection) {
+        const now = new Date();
+        const dd = String(now.getDate()).padStart(2, '0');
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const yyyy = now.getFullYear();
+        setDateText(`${dd}/${mm}/${yyyy}`);
+
+        let hours = now.getHours();
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const period = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12 || 12;
+        const formattedHours = String(hours).padStart(2, '0');
+        setTimeText(`${formattedHours}:${minutes} ${period}`);
+      }
+
+      // Add distinct files
+      const combined = [...prev];
+      newItems.forEach((item) => {
+        if (!combined.some((p) => p.file.name === item.file.name && p.file.size === item.file.size)) {
+          combined.push(item);
+        }
+      });
+      return combined;
+    });
+
+    setAddPhotoMode('PHOTOS_SELECTED');
+  };
+
+  const handleRemovePhoto = (index) => {
+    setPendingPhotos((prev) => {
+      const removed = prev[index];
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      const updated = prev.filter((_, i) => i !== index);
+      if (updated.length === 0) {
+        setAddPhotoMode('LOCATION_SELECTED');
+      }
+      return updated;
+    });
+  };
+
+  const handleCancelAddPhoto = () => {
+    setAddPhotoMode('NONE');
+    setSelectedAddPhotoLocation(null);
+    pendingPhotos.forEach((p) => {
+      if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+    });
+    setPendingPhotos([]);
+    setDateText('');
+    setTimeText('');
+  };
+
+  // Step 3: Submit and upload all selected photos
+  const handleSubmitAddPhotos = async () => {
+    if (!selectedAddPhotoLocation) {
+      showToast('Please select a location first', 'error');
+      return;
+    }
+    if (pendingPhotos.length === 0) {
+      showToast('Please select at least one photo', 'error');
+      return;
+    }
+
+    // Parse dateText (DD/MM/YYYY) and timeText (hh:mm a) into LocalDateTime ISO format
+    let isoDateStr = new Date().toISOString();
+    try {
+      let year, month, day;
+      const ddmmyyyy = dateText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (ddmmyyyy) {
+        day = parseInt(ddmmyyyy[1], 10);
+        month = parseInt(ddmmyyyy[2], 10) - 1;
+        year = parseInt(ddmmyyyy[3], 10);
+      } else {
+        const now = new Date();
+        year = now.getFullYear();
+        month = now.getMonth();
+        day = now.getDate();
+      }
+
+      let hours = 12;
+      let minutes = 0;
+      const timeMatch = timeText.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+      if (timeMatch) {
+        let h = parseInt(timeMatch[1], 10);
+        const m = parseInt(timeMatch[2], 10);
+        const p = timeMatch[3] ? timeMatch[3].toUpperCase() : null;
+        if (p === 'PM' && h < 12) h += 12;
+        if (p === 'AM' && h === 12) h = 0;
+        hours = h;
+        minutes = m;
+      }
+
+      const constructedDate = new Date(year, month, day, hours, minutes, 0);
+      const yyyy = constructedDate.getFullYear();
+      const mm = String(constructedDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(constructedDate.getDate()).padStart(2, '0');
+      const hh = String(constructedDate.getHours()).padStart(2, '0');
+      const min = String(constructedDate.getMinutes()).padStart(2, '0');
+      const ss = String(constructedDate.getSeconds()).padStart(2, '0');
+      isoDateStr = `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
+    } catch (err) {
+      console.warn('Error parsing date/time:', err);
+    }
+
+    try {
+      setIsUploading(true);
+      setUploadProgress({ current: 0, total: pendingPhotos.length });
+
+      for (let i = 0; i < pendingPhotos.length; i++) {
+        const item = pendingPhotos[i];
+        setUploadProgress({ current: i + 1, total: pendingPhotos.length });
+
+        // 1. Initiate presigned upload
+        const { s3Key, presignedUrl } = await photoApi.initiateUpload(item.file.name);
+
+        // 2. Direct PUT to S3
+        await photoApi.uploadToS3(presignedUrl, item.file);
+
+        // 3. Confirm upload with metadata in backend
+        await photoApi.confirmUpload({
+          s3Key,
+          name: item.name || item.file.name,
+          takenAt: isoDateStr,
+          location: {
+            latitude: selectedAddPhotoLocation.lat,
+            longitude: selectedAddPhotoLocation.lng,
+            locationName: null,
+          },
+        });
+      }
+
+      const count = pendingPhotos.length;
+      showToast(`Successfully pinned ${count} photo${count > 1 ? 's' : ''}!`, 'success');
+
+      // Refresh clusters
+      fetchAndIndexClusters();
+
+      // Pan camera to newly pinned photos
+      setMapCenter({ lat: selectedAddPhotoLocation.lat, lng: selectedAddPhotoLocation.lng });
       setMapZoom(15);
+
+      // Clean up and reset
+      handleCancelAddPhoto();
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      showToast(err.response?.data?.message || 'Failed to upload one or more photos', 'error');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -160,12 +351,25 @@ export const MapPage = () => {
     <div className="relative w-full h-screen overflow-hidden">
       {/* Floating Top Header */}
       <div className="absolute top-4 left-4 z-30 pointer-events-auto">
-        <div className="flex items-center gap-3 px-4 py-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
-          <LogoHeader size="sm" />
-          <span className="text-xs font-bold text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark border-l border-pinpic-border-light dark:border-pinpic-outline-dark pl-2.5">
-            {clustersData.length} Clusters
-          </span>
-        </div>
+        {addPhotoMode === 'NONE' ? (
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
+            <LogoHeader size="sm" />
+            <span className="text-xs font-bold text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark border-l border-pinpic-border-light dark:border-pinpic-outline-dark pl-2">
+              {clustersData.length} Clusters
+            </span>
+          </div>
+        ) : (
+          <button
+            onClick={handleCancelAddPhoto}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md text-pinpic-coral hover:bg-black/5 dark:hover:bg-white/5 active:scale-95 transition-all"
+            title="Cancel Add Photo"
+          >
+            <X className="w-4 h-4 stroke-[2.5]" />
+            <span className="text-xs font-bold text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark">
+              Cancel
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Floating Action Controls on Map (Top Right) */}
@@ -187,28 +391,31 @@ export const MapPage = () => {
         </button>
       </div>
 
-      {/* Add Photo Floating Action Button (FAB) at Bottom Right */}
-      <div className="absolute bottom-24 right-5 sm:bottom-8 sm:right-8 z-30 pointer-events-auto">
-        <button
-          onClick={() => {
-            setClickedLocation(null);
-            setIsAddModalOpen(true);
-          }}
-          className="flex items-center gap-2 py-3.5 px-5 rounded-full bg-pinpic-coral hover:bg-pinpic-coral/95 text-white font-bold shadow-xl shadow-pinpic-coral/30 hover:scale-105 active:scale-95 transition-all"
-        >
-          <Plus className="w-5 h-5 stroke-[2.5]" />
-          <span className="text-sm">Pin Photo</span>
-        </button>
-      </div>
+      {/* Add Photo Floating Action Button (FAB) at Bottom Right - only when addPhotoMode is NONE */}
+      {addPhotoMode === 'NONE' && (
+        <div className="absolute bottom-24 right-5 sm:bottom-8 sm:right-8 z-30 pointer-events-auto animate-in fade-in zoom-in-90">
+          <button
+            onClick={() => {
+              setSelectedNode(null);
+              setSelectedClusterDetail(null);
+              setAddPhotoMode('SELECT_LOCATION');
+            }}
+            className="flex items-center gap-2 py-3.5 px-5 rounded-full bg-pinpic-coral hover:bg-pinpic-coral/95 text-white font-bold shadow-xl shadow-pinpic-coral/30 hover:scale-105 active:scale-95 transition-all"
+          >
+            <Plus className="w-5 h-5 stroke-[2.5]" />
+            <span className="text-sm">Pin Photo</span>
+          </button>
+        </div>
+      )}
 
-      {/* PinPic Interactive Map Container (Zero API Key, No Auth Errors) */}
+      {/* OpenStreetMap with Android App Map Theme Palette */}
       <PinPicMapContainer
         center={mapCenter}
         zoom={mapZoom}
+        isSelectingLocation={addPhotoMode === 'SELECT_LOCATION' || addPhotoMode === 'LOCATION_SELECTED'}
         onCameraChange={handleCameraChange}
         onMapClick={handleMapClick}
       >
-        {/* Render ONLY spatial clusters computed by the KD-Tree GeoClusterIndex */}
         {visibleNodes.map((node) => (
           <PinPicClusterMarker
             key={`cluster-${node.id}`}
@@ -217,10 +424,52 @@ export const MapPage = () => {
             onClick={handleNodeClick}
           />
         ))}
+
+        {selectedAddPhotoLocation && (
+          <DroppedPinMarker
+            position={selectedAddPhotoLocation}
+            onDragEnd={(newPos) => setSelectedAddPhotoLocation(newPos)}
+          />
+        )}
       </PinPicMapContainer>
 
+      {/* Add Photo 3-Step Bottom Sheet */}
+      <AddPhotoBottomSheet
+        addPhotoMode={addPhotoMode}
+        selectedLocation={selectedAddPhotoLocation}
+        pendingPhotos={pendingPhotos}
+        onSelectPhotos={handleSelectPhotos}
+        onRemovePhoto={handleRemovePhoto}
+        dateText={dateText}
+        onDateTextChange={setDateText}
+        onOpenDatePicker={() => setIsDatePickerOpen(true)}
+        timeText={timeText}
+        onTimeTextChange={setTimeText}
+        onOpenTimePicker={() => setIsTimePickerOpen(true)}
+        onSubmit={handleSubmitAddPhotos}
+        onCancel={handleCancelAddPhoto}
+        isUploading={isUploading}
+        uploadProgress={uploadProgress}
+      />
+
+      {/* Date Picker Modal */}
+      <DatePickerModal
+        isOpen={isDatePickerOpen}
+        onClose={() => setIsDatePickerOpen(false)}
+        initialDate={dateText}
+        onSelectDate={(newDate) => setDateText(newDate)}
+      />
+
+      {/* Time Picker Modal */}
+      <TimePickerModal
+        isOpen={isTimePickerOpen}
+        onClose={() => setIsTimePickerOpen(false)}
+        initialTime={timeText}
+        onSelectTime={(newTime) => setTimeText(newTime)}
+      />
+
       {/* Selected Single Photo Card */}
-      {selectedPhotoForCard && (
+      {addPhotoMode === 'NONE' && selectedPhotoForCard && (
         <SelectedPhotoCard
           photo={selectedPhotoForCard}
           onClose={() => setSelectedNode(null)}
@@ -232,25 +481,19 @@ export const MapPage = () => {
       )}
 
       {/* Selected Aggregate Cluster Bottom Sheet */}
-      <SelectedClusterSheet
-        cluster={selectedClusterDetail}
-        onClose={() => setSelectedClusterDetail(null)}
-        onSelectPhoto={(photo) => {
-          setFullScreenPhotos(selectedClusterDetail.photos);
-          const idx = selectedClusterDetail.photos.findIndex(
-            (p) => (p.photoId || p.id) === (photo.photoId || photo.id)
-          );
-          setFullScreenIndex(Math.max(0, idx));
-        }}
-      />
-
-      {/* Add Photo Modal */}
-      <AddPhotoModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        initialLocation={clickedLocation}
-        onPhotoUploaded={handlePhotoUploaded}
-      />
+      {addPhotoMode === 'NONE' && (
+        <SelectedClusterSheet
+          cluster={selectedClusterDetail}
+          onClose={() => setSelectedClusterDetail(null)}
+          onSelectPhoto={(photo) => {
+            setFullScreenPhotos(selectedClusterDetail.photos);
+            const idx = selectedClusterDetail.photos.findIndex(
+              (p) => (p.photoId || p.id) === (photo.photoId || photo.id)
+            );
+            setFullScreenIndex(Math.max(0, idx));
+          }}
+        />
+      )}
 
       {/* Full-Screen Image Viewer */}
       <FullScreenImageViewer
