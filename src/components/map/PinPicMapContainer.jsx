@@ -123,12 +123,15 @@ export const PinPicMapContainer = ({
         zoomControl={false}
         className={`w-full h-full ${isSelectingLocation ? 'cursor-crosshair' : ''}`}
       >
-        {/* OpenStreetMap Tile Layer styled to match Android Map theme */}
+        {/* OpenStreetMap Tile Layer: tileSize=128 + zoomOffset=1 renders high-DPI tiles, making road lines 50% thinner and crisp */}
         <TileLayer
           attribution={attribution}
           url={osmTileUrl}
           subdomains="abc"
           className={tileClassName}
+          tileSize={128}
+          zoomOffset={1}
+          maxNativeZoom={18}
           maxZoom={20}
         />
 

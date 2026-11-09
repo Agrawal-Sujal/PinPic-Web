@@ -44,15 +44,16 @@ body {
   background-color: #0f0f0f !important;
 }
 
-/* OpenStreetMap tile filters: Applies color matrix to match Android light.json and dark.json Google Map styling */
+/* OpenStreetMap tile filters: Applies color matrix to match Android light.json and dark.json Google Map styling.
+   Subtle contrast reduction softens dark road casings into the background land, making roads appear thin and delicate. */
 .light-osm-tiles,
 .light-osm-tiles .leaflet-tile {
-  filter: url(#osm-light-filter);
+  filter: url(#osm-light-filter) brightness(1.02) contrast(0.92);
 }
 
 .dark-osm-tiles,
 .dark-osm-tiles .leaflet-tile {
-  filter: url(#osm-dark-filter);
+  filter: url(#osm-dark-filter) brightness(0.96) contrast(0.95);
 }
 
 .cursor-crosshair, .cursor-crosshair .leaflet-interactive, .cursor-crosshair .leaflet-container {
