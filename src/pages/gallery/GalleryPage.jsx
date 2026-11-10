@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   CheckSquare,
   Square,
@@ -13,8 +13,8 @@ import {
 import { format } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { userApi } from '../../api/userApi';
-import { photoApi } from '../../api/photoApi';
+import { localPhotoRepository } from '../../data/localPhotoRepository';
+import { useSyncStatus } from '../../hooks/useSyncStatus';
 import ChangeVisibilityModal from '../../components/gallery/ChangeVisibilityModal';
 import AddPhotoModal from '../../components/map/AddPhotoModal';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
@@ -23,6 +23,7 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 export const GalleryPage = () => {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const { isSyncing, triggerSync } = useSyncStatus();
 
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,23 +36,26 @@ export const GalleryPage = () => {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
 
-  const fetchPhotos = async () => {
-    if (!user?.userId) return;
+  const fetchPhotos = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await userApi.getUserPhotos(user.userId);
+      const res = await localPhotoRepository.getAllPhotos(user?.userId);
       setPhotos(res || []);
     } catch (err) {
-      console.error('Error fetching photos:', err);
+      console.error('Error fetching photos from local repository:', err);
       showToast('Failed to load gallery photos', 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.userId, showToast]);
 
   useEffect(() => {
     fetchPhotos();
-  }, [user?.userId]);
+    const unsubscribe = localPhotoRepository.subscribe(() => {
+      fetchPhotos();
+    });
+    return unsubscribe;
+  }, [fetchPhotos]);
 
   const toggleSelectPhoto = (id) => {
     setSelectedIds((prev) => {
@@ -68,7 +72,7 @@ export const GalleryPage = () => {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } else {
-      setSelectedIds(new Set(photos.map((p) => p.photoId || p.id)));
+      setSelectedIds(new Set(photos.map((p) => p.localPhotoId || p.photoId || p.id)));
       setIsSelectionMode(true);
     }
   };
@@ -78,7 +82,7 @@ export const GalleryPage = () => {
     if (!window.confirm(`Delete ${selectedIds.size} selected photo(s)?`)) return;
 
     try {
-      await photoApi.deletePhotosBatch(Array.from(selectedIds));
+      await localPhotoRepository.deletePhotos(Array.from(selectedIds));
       showToast(`Deleted ${selectedIds.size} photo(s)`, 'success');
       setSelectedIds(new Set());
       setIsSelectionMode(false);
@@ -90,10 +94,17 @@ export const GalleryPage = () => {
   };
 
   const handleApplyVisibility = async (newVisibility) => {
-    showToast(`Updated visibility to ${newVisibility} (Simulated)`, 'success');
-    setIsVisibilityModalOpen(false);
-    setSelectedIds(new Set());
-    setIsSelectionMode(false);
+    try {
+      await localPhotoRepository.updatePhotosVisibility(Array.from(selectedIds), newVisibility);
+      showToast(`Updated visibility to ${newVisibility}`, 'success');
+      setIsVisibilityModalOpen(false);
+      setSelectedIds(new Set());
+      setIsSelectionMode(false);
+      fetchPhotos();
+    } catch (err) {
+      console.error('Visibility update error:', err);
+      showToast('Failed to update visibility', 'error');
+    }
   };
 
   const handlePhotoClick = (index, photoId) => {
@@ -137,6 +148,18 @@ export const GalleryPage = () => {
             </>
           ) : (
             <>
+              <button
+                onClick={() => {
+                  fetchPhotos();
+                  triggerSync(user?.userId);
+                }}
+                title={isSyncing ? 'Syncing changes...' : 'Refresh & Sync'}
+                className="p-2 rounded-full border border-pinpic-border-light dark:border-pinpic-outline-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${isSyncing || loading ? 'animate-spin text-pinpic-coral' : ''}`}
+                />
+              </button>
               <button
                 onClick={() => setIsAddModalOpen(true)}
                 className="flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-full bg-pinpic-coral text-white shadow-sm hover:bg-pinpic-coral/90 transition-transform active:scale-95"
@@ -277,7 +300,7 @@ export const GalleryPage = () => {
         onClose={() => setViewerOpen(false)}
         onDelete={async (photoId) => {
           try {
-            await photoApi.deletePhoto(photoId);
+            await localPhotoRepository.deletePhotos([photoId]);
             showToast('Photo deleted', 'success');
             fetchPhotos();
           } catch (err) {

@@ -1,10 +1,12 @@
 import React, { useState, useRef } from 'react';
 import exifr from 'exifr';
 import { X, Upload, MapPin, Calendar, Globe, Lock, Users, Loader2 } from 'lucide-react';
-import { photoApi } from '../../api/photoApi';
+import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { localPhotoRepository } from '../../data/localPhotoRepository';
 
 export const AddPhotoModal = ({ isOpen, onClose, initialLocation, onPhotoUploaded }) => {
+  const { user } = useAuth();
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [name, setName] = useState('');
@@ -68,30 +70,31 @@ export const AddPhotoModal = ({ isOpen, onClose, initialLocation, onPhotoUploade
     try {
       setUploading(true);
 
-      // 1. Request presigned upload URL from backend
-      const { s3Key, presignedUrl } = await photoApi.initiateUpload(selectedFile.name);
-
-      // 2. Upload file directly to S3
-      await photoApi.uploadToS3(presignedUrl, selectedFile);
-
-      // 3. Confirm upload with metadata in backend
-      const confirmedPhoto = await photoApi.confirmUpload({
-        s3Key,
-        name: name.trim() || selectedFile.name,
-        takenAt: new Date(takenAt).toISOString(),
+      const saved = await localPhotoRepository.savePhotosWithCluster({
+        photos: [
+          {
+            name: name.trim() || selectedFile.name,
+            file: selectedFile,
+            previewUrl,
+            takenAt: new Date(takenAt).toISOString(),
+          },
+        ],
         location: {
           latitude: latNum,
           longitude: lngNum,
           locationName: locationName.trim() || null,
         },
+        dateStr: new Date(takenAt).toISOString(),
+        userId: user?.userId,
+        visibility,
       });
 
-      showToast('Photo pinned successfully!', 'success');
-      if (onPhotoUploaded) onPhotoUploaded(confirmedPhoto);
+      showToast('Photo pinned locally! Syncing in background...', 'success');
+      if (onPhotoUploaded) onPhotoUploaded(saved);
       onClose();
     } catch (err) {
-      console.error('Photo upload error:', err);
-      showToast(err.response?.data?.message || 'Failed to upload photo', 'error');
+      console.error('Photo save error:', err);
+      showToast('Failed to save photo', 'error');
     } finally {
       setUploading(false);
     }
