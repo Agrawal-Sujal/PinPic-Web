@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authApi } from '../api/authApi';
 import { userApi } from '../api/userApi';
+import { clearLocalDatabase } from '../db/appDatabase';
+import syncScheduler from '../sync/syncScheduler';
+import deviceService from '../services/deviceService';
 
 const AuthContext = createContext();
 
@@ -38,7 +41,12 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initAuth = async () => {
       if (token) {
-        await refreshProfile();
+        const profile = await refreshProfile();
+        const currentUserId = profile?.userId || user?.userId;
+        if (currentUserId) {
+          deviceService.getOrRegisterDeviceId(currentUserId).catch(() => {});
+          syncScheduler.startPeriodicSync(currentUserId);
+        }
       }
       setLoading(false);
     };
@@ -58,6 +66,10 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('pinpic_user', JSON.stringify(initialUser));
       setToken(data.jwt);
       setUser(initialUser);
+
+      // Register device & start sync engine
+      deviceService.getOrRegisterDeviceId(data.userId).catch(() => {});
+      syncScheduler.startPeriodicSync(data.userId);
 
       // Fetch full profile immediately
       try {
@@ -92,9 +104,12 @@ export const AuthProvider = ({ children }) => {
     setHasCompletedOnboarding(true);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    syncScheduler.stopPeriodicSync();
+    await clearLocalDatabase();
     localStorage.removeItem('pinpic_jwt_token');
     localStorage.removeItem('pinpic_user');
+    localStorage.removeItem('pinpic_device_id');
     setToken(null);
     setUser(null);
   };

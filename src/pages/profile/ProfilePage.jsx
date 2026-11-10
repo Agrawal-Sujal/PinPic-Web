@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Settings, Edit3, Grid, User, MapPin } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { userApi } from '../../api/userApi';
+import { localPhotoRepository } from '../../data/localPhotoRepository';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 
@@ -21,12 +22,12 @@ export const ProfilePage = () => {
     const loadProfileAndPhotos = async () => {
       try {
         setLoading(true);
-        const [profileData, userPhotos] = await Promise.all([
+        const [profileData, localPhotos] = await Promise.all([
           userApi.getProfile().catch(() => user),
-          user?.userId ? userApi.getUserPhotos(user.userId).catch(() => []) : [],
+          user?.userId ? localPhotoRepository.getAllPhotos(user.userId).catch(() => []) : [],
         ]);
         if (profileData) setProfile(profileData);
-        setPhotos(userPhotos || []);
+        setPhotos(localPhotos || []);
       } catch (err) {
         console.error('Profile fetch error:', err);
       } finally {
@@ -35,6 +36,10 @@ export const ProfilePage = () => {
     };
 
     loadProfileAndPhotos();
+    const unsubscribe = localPhotoRepository.subscribe(() => {
+      loadProfileAndPhotos();
+    });
+    return unsubscribe;
   }, [user?.userId]);
 
   return (

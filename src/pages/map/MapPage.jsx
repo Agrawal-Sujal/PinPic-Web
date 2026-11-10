@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Navigation, RefreshCw, X } from 'lucide-react';
+import { Plus, Navigation, RefreshCw, X, Cloud } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { userApi } from '../../api/userApi';
-import { photoApi } from '../../api/photoApi';
+import { localPhotoRepository } from '../../data/localPhotoRepository';
+import { useSyncStatus } from '../../hooks/useSyncStatus';
 import PinPicMapContainer from '../../components/map/PinPicMapContainer';
 import PinPicClusterMarker from '../../components/map/PinPicClusterMarker';
 import DroppedPinMarker from '../../components/map/DroppedPinMarker';
@@ -49,20 +49,20 @@ export const MapPage = () => {
   const [fullScreenPhotos, setFullScreenPhotos] = useState([]);
   const [fullScreenIndex, setFullScreenIndex] = useState(0);
 
-  // Fetch clusters from backend and build hierarchical KD-Tree spatial index
+  const { isSyncing, triggerSync } = useSyncStatus();
+
+  // Fetch clusters from local database and build hierarchical KD-Tree spatial index
   const fetchAndIndexClusters = useCallback(async () => {
-    if (!user?.userId) return;
     try {
       setLoading(true);
-      const res = await userApi.getUserClusters(user.userId).catch(() => []);
-      const clusters = res || [];
+      const clusters = await localPhotoRepository.getUnMergedClusters();
       setClustersData(clusters);
 
       // Build GeoClusterIndex with KD-Tree
       clusteringSystem.current.build(clusters, 40.0);
 
-      // Center on first cluster if exists
-      if (clusters.length > 0 && clusters[0].location?.latitude) {
+      // Center on first cluster if exists and camera hasn't been set yet
+      if (clusters.length > 0 && clusters[0].location?.latitude && !lastCameraRef.current) {
         const first = clusters[0].location;
         setMapCenter({ lat: first.latitude, lng: first.longitude });
         setMapZoom(13);
@@ -75,15 +75,20 @@ export const MapPage = () => {
         setVisibleNodes(nodes);
       }
     } catch (err) {
-      console.error('Error fetching user clusters:', err);
+      console.error('Error loading local clusters:', err);
       showToast('Failed to load clusters', 'error');
     } finally {
       setLoading(false);
     }
-  }, [user?.userId, showToast]);
+  }, [showToast]);
 
   useEffect(() => {
     fetchAndIndexClusters();
+    // Subscribe to local repository changes
+    const unsubscribe = localPhotoRepository.subscribe(() => {
+      fetchAndIndexClusters();
+    });
+    return unsubscribe;
   }, [fetchAndIndexClusters]);
 
   // Fast O(log N) camera-idle query over KD-Tree
@@ -291,46 +296,32 @@ export const MapPage = () => {
 
     try {
       setIsUploading(true);
-      setUploadProgress({ current: 0, total: pendingPhotos.length });
 
-      for (let i = 0; i < pendingPhotos.length; i++) {
-        const item = pendingPhotos[i];
-        setUploadProgress({ current: i + 1, total: pendingPhotos.length });
-
-        // 1. Initiate presigned upload
-        const { s3Key, presignedUrl } = await photoApi.initiateUpload(item.file.name);
-
-        // 2. Direct PUT to S3
-        await photoApi.uploadToS3(presignedUrl, item.file);
-
-        // 3. Confirm upload with metadata in backend
-        await photoApi.confirmUpload({
-          s3Key,
-          name: item.name || item.file.name,
-          takenAt: isoDateStr,
-          location: {
-            latitude: selectedAddPhotoLocation.lat,
-            longitude: selectedAddPhotoLocation.lng,
-            locationName: null,
-          },
-        });
-      }
+      await localPhotoRepository.savePhotosWithCluster({
+        photos: pendingPhotos,
+        location: {
+          latitude: selectedAddPhotoLocation.lat,
+          longitude: selectedAddPhotoLocation.lng,
+          locationName: null,
+        },
+        dateStr: isoDateStr,
+        userId: user?.userId,
+        visibility: 'PUBLIC',
+      });
 
       const count = pendingPhotos.length;
-      showToast(`Successfully pinned ${count} photo${count > 1 ? 's' : ''}!`, 'success');
+      showToast(`Pinned ${count} photo${count > 1 ? 's' : ''}! Syncing in background...`, 'success');
 
-      // Refresh clusters
-      fetchAndIndexClusters();
-
-      // Pan camera to newly pinned photos
+      // Refresh clusters locally & pan camera immediately
+      await fetchAndIndexClusters();
       setMapCenter({ lat: selectedAddPhotoLocation.lat, lng: selectedAddPhotoLocation.lng });
       setMapZoom(15);
 
       // Clean up and reset
       handleCancelAddPhoto();
     } catch (err) {
-      console.error('Photo upload error:', err);
-      showToast(err.response?.data?.message || 'Failed to upload one or more photos', 'error');
+      console.error('Photo save error:', err);
+      showToast('Failed to save photos', 'error');
     } finally {
       setIsUploading(false);
     }
@@ -383,11 +374,16 @@ export const MapPage = () => {
         </button>
 
         <button
-          onClick={fetchAndIndexClusters}
-          title="Refresh Clusters"
+          onClick={() => {
+            fetchAndIndexClusters();
+            triggerSync(user?.userId);
+          }}
+          title={isSyncing ? 'Syncing with cloud...' : 'Refresh & Sync'}
           className="p-3 rounded-full bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-lg hover:bg-black/5 dark:hover:bg-white/5 text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark transition-transform active:scale-95"
         >
-          <RefreshCw className={`w-5 h-5 stroke-[2] ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-5 h-5 stroke-[2] ${loading || isSyncing ? 'animate-spin text-pinpic-coral' : ''}`}
+          />
         </button>
       </div>
 
