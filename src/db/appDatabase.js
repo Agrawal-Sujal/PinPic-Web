@@ -40,12 +40,24 @@ export const setSyncMetadata = async (key, value) => {
  */
 export const clearLocalDatabase = async () => {
   try {
-    await db.transaction('rw', [db.photos, db.clusters, db.syncOperations, db.syncMetadata], async () => {
-      await db.photos.clear();
-      await db.clusters.clear();
-      await db.syncOperations.clear();
-      await db.syncMetadata.clear();
-    });
+    if (!db.isOpen()) {
+      await db.open().catch(() => {});
+    }
+
+    const tableList =
+      db.tables?.length > 0
+        ? db.tables
+        : [db.photos, db.clusters, db.syncOperations, db.syncMetadata].filter(Boolean);
+
+    await Promise.all(
+      tableList.map(async (table) => {
+        try {
+          await table.clear();
+        } catch (err) {
+          console.warn(`Failed to clear table ${table?.name}:`, err);
+        }
+      })
+    );
     console.log('Local PinPic database cleared.');
   } catch (err) {
     console.error('Failed to clear local database:', err);

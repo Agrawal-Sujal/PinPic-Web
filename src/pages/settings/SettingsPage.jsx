@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Moon, Sun, Monitor, LogOut, Shield, Info } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -10,12 +10,23 @@ export const SettingsPage = () => {
   const { themeMode, setThemeMode } = useTheme();
   const { showToast } = useToast();
   const navigate = useNavigate();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (isLoggingOut) return;
     if (window.confirm('Are you sure you want to log out of PinPic?')) {
-      logout();
-      showToast('Logged out successfully', 'info');
-      navigate('/login');
+      try {
+        setIsLoggingOut(true);
+        await logout();
+        showToast('Logged out successfully', 'info');
+        navigate('/login', { replace: true });
+      } catch (err) {
+        console.error('Logout error:', err);
+        showToast('Logged out', 'info');
+        navigate('/login', { replace: true });
+      } finally {
+        setIsLoggingOut(false);
+      }
     }
   };
 
@@ -104,10 +115,11 @@ export const SettingsPage = () => {
         {/* Logout CTA */}
         <button
           onClick={handleLogout}
-          className="w-full py-3.5 px-4 rounded-2xl bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-sm"
+          disabled={isLoggingOut}
+          className="w-full py-3.5 px-4 rounded-2xl bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-500 border border-red-500/20 font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:cursor-not-allowed"
         >
           <LogOut className="w-4 h-4" />
-          <span>Log Out</span>
+          <span>{isLoggingOut ? 'Logging Out...' : 'Log Out'}</span>
         </button>
       </div>
     </div>

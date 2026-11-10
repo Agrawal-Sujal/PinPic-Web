@@ -6,8 +6,18 @@ import { deviceService } from '../services/deviceService';
 import { notifyRepositoryChanged } from '../data/localPhotoRepository';
 
 let isSyncRunning = false;
+let isSyncCancelled = false;
 
 export const syncEngine = {
+  /**
+   * Cancel any in-progress sync execution (e.g. on user logout)
+   */
+  cancelSync: () => {
+    console.log('[SyncEngine] Cancelling in-progress sync...');
+    isSyncCancelled = true;
+    isSyncRunning = false;
+  },
+
   /**
    * Main sync workflow: Push pending local changes, then Pull cloud updates
    */
@@ -29,15 +39,19 @@ export const syncEngine = {
     }
 
     isSyncRunning = true;
+    isSyncCancelled = false;
     try {
       console.log('[SyncEngine] Starting synchronization cycle...');
       const deviceId = await deviceService.getOrRegisterDeviceId(userId);
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
 
       // Optional initial bootstrap if local DB is completely empty
       await syncEngine.bootstrapIfEmpty(userId);
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
 
       // Phase 1: Push phase
       await syncEngine.pushLocalChanges(deviceId);
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
 
       // Phase 2: Pull phase
       await syncEngine.pullCloudChanges(deviceId, userId);
@@ -45,6 +59,10 @@ export const syncEngine = {
       console.log('[SyncEngine] Synchronization cycle completed successfully.');
       return true;
     } catch (err) {
+      if (isSyncCancelled) {
+        console.log('[SyncEngine] Sync was cancelled.');
+        return false;
+      }
       console.error('[SyncEngine] Error during synchronization:', err);
       return false;
     } finally {
@@ -56,10 +74,12 @@ export const syncEngine = {
    * If database is brand new and empty, seed it from cloud user API
    */
   bootstrapIfEmpty: async (userId) => {
-    if (!userId) return;
+    if (!userId || isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return;
     try {
       const photoCount = await db.photos.count();
       const lastOpId = await getSyncMetadata('lastSyncedOperationId', 0);
+
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return;
 
       if (photoCount === 0 && Number(lastOpId) === 0) {
         console.log('[SyncEngine] Local database empty. Bootstrapping user data from cloud...');
@@ -67,6 +87,8 @@ export const syncEngine = {
           userApi.getUserClusters(userId).catch(() => []),
           userApi.getUserPhotos(userId).catch(() => []),
         ]);
+
+        if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return;
 
         if (cloudClusters?.length > 0 || cloudPhotos?.length > 0) {
           await db.transaction('rw', [db.photos, db.clusters], async () => {
@@ -131,6 +153,11 @@ export const syncEngine = {
     const batchSize = 1;
 
     while (true) {
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
+        console.log('[SyncEngine] Push cancelled due to logout/unauthorized.');
+        break;
+      }
+
       const pendingBatch = await db.syncOperations
         .where('status')
         .equals('PENDING')
@@ -354,6 +381,11 @@ export const syncEngine = {
     let anyChangesApplied = false;
 
     while (true) {
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
+        console.log('[SyncEngine] Pull cancelled due to logout/unauthorized.');
+        break;
+      }
+
       let currentLastOpId = Number(await getSyncMetadata('lastSyncedOperationId', 0));
       console.log(`[SyncEngine] Pulling cloud changes since opId: ${currentLastOpId}...`);
 
@@ -362,6 +394,11 @@ export const syncEngine = {
         batchSize: pullBatchSize,
         deviceId,
       });
+
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
+        console.log('[SyncEngine] Pull cancelled before applying operations.');
+        break;
+      }
 
       const operations = pullResponse?.operations || [];
       if (operations.length === 0) {
@@ -373,6 +410,10 @@ export const syncEngine = {
       let latestOpId = currentLastOpId;
 
       for (const op of operations) {
+        if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
+          console.log('[SyncEngine] Aborting pulled operations loop due to cancellation.');
+          break;
+        }
         try {
           const entityType = op.entityType?.toUpperCase();
           const operation = op.operation?.toUpperCase();
