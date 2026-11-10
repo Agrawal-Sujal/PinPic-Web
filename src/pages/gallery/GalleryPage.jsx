@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   CheckSquare,
   Square,
@@ -16,7 +16,7 @@ import { useToast } from '../../context/ToastContext';
 import { localPhotoRepository } from '../../data/localPhotoRepository';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import ChangeVisibilityModal from '../../components/gallery/ChangeVisibilityModal';
-import AddPhotoModal from '../../components/map/AddPhotoModal';
+import ImportProgressModal from '../../components/gallery/ImportProgressModal';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 
@@ -30,7 +30,15 @@ export const GalleryPage = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [isVisibilityModalOpen, setIsVisibilityModalOpen] = useState(false);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // Multi-photo import progress state matching Android ImportProgressDialog
+  const [importState, setImportState] = useState({
+    isImporting: false,
+    current: 0,
+    total: 0,
+  });
+
+  const fileInputRef = useRef(null);
 
   // Full-screen viewer state
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -116,6 +124,49 @@ export const GalleryPage = () => {
     }
   };
 
+  const handleOpenPhotoPicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFilesSelected = async (e) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const files = Array.from(fileList);
+    setImportState({
+      isImporting: true,
+      current: 0,
+      total: files.length,
+    });
+
+    try {
+      const inserted = await localPhotoRepository.importPhotos(files, {
+        onProgress: (current, total) => {
+          setImportState((prev) => ({ ...prev, current, total }));
+        },
+        userId: user?.userId,
+      });
+
+      showToast(`Successfully imported ${inserted.length} photo(s)`, 'success');
+      fetchPhotos();
+    } catch (err) {
+      console.error('Failed to import photos:', err);
+      showToast('Failed to import photos', 'error');
+    } finally {
+      setImportState({
+        isImporting: false,
+        current: 0,
+        total: 0,
+      });
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen bg-pinpic-bg-light dark:bg-pinpic-bg-dark text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark pb-28 pt-4 px-4 sm:px-6 max-w-5xl mx-auto">
       {/* Top Header / Action Toolbar */}
@@ -161,7 +212,7 @@ export const GalleryPage = () => {
                 />
               </button>
               <button
-                onClick={() => setIsAddModalOpen(true)}
+                onClick={handleOpenPhotoPicker}
                 className="flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-full bg-pinpic-coral text-white shadow-sm hover:bg-pinpic-coral/90 transition-transform active:scale-95"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
@@ -217,11 +268,11 @@ export const GalleryPage = () => {
             Your photos will show up here once you upload or pin them to the map.
           </p>
           <button
-            onClick={() => setIsAddModalOpen(true)}
+            onClick={handleOpenPhotoPicker}
             className="flex items-center gap-2 py-2.5 px-4 rounded-full bg-pinpic-coral text-white text-xs font-bold shadow-md hover:bg-pinpic-coral/90"
           >
             <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Pin First Photo</span>
+            <span>Upload Photos</span>
           </button>
         </div>
       ) : (
@@ -277,6 +328,16 @@ export const GalleryPage = () => {
         </div>
       )}
 
+      {/* Hidden Multi-Photo File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*"
+        onChange={handleFilesSelected}
+        className="hidden"
+      />
+
       {/* Visibility Modal */}
       <ChangeVisibilityModal
         isOpen={isVisibilityModalOpen}
@@ -285,11 +346,11 @@ export const GalleryPage = () => {
         onApply={handleApplyVisibility}
       />
 
-      {/* Add Photo Modal */}
-      <AddPhotoModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onPhotoUploaded={() => fetchPhotos()}
+      {/* Import Progress Modal */}
+      <ImportProgressModal
+        isOpen={importState.isImporting}
+        current={importState.current}
+        total={importState.total}
       />
 
       {/* Full-Screen Image Viewer */}
