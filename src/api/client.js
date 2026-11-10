@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearLocalDatabase } from '../db/appDatabase';
 
 // Create base axios instance
 const api = axios.create({
@@ -23,14 +24,21 @@ api.interceptors.request.use(
 // Intercept responses to handle 401 Unauthorized
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response && error.response.status === 401) {
       const isAuthRoute = window.location.pathname.startsWith('/login') ||
                           window.location.pathname.startsWith('/signup') ||
                           window.location.pathname.startsWith('/onboarding');
       if (!isAuthRoute) {
-        localStorage.removeItem('pinpic_jwt_token');
-        localStorage.removeItem('pinpic_user');
+        try {
+          await clearLocalDatabase();
+        } catch (_) {}
+
+        try {
+          localStorage.clear();
+          sessionStorage.clear();
+        } catch (_) {}
+
         window.location.href = '/login';
       }
     }

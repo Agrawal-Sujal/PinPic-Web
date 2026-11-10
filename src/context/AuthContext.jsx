@@ -4,6 +4,7 @@ import { userApi } from '../api/userApi';
 import { clearLocalDatabase } from '../db/appDatabase';
 import syncScheduler from '../sync/syncScheduler';
 import deviceService from '../services/deviceService';
+import { notifyRepositoryChanged } from '../data/localPhotoRepository';
 
 const AuthContext = createContext();
 
@@ -105,13 +106,37 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    // 1. Stop background sync and cancel running sync operations
     syncScheduler.stopPeriodicSync();
+
+    // 2. Clear all tables in local IndexedDB database
     await clearLocalDatabase();
-    localStorage.removeItem('pinpic_jwt_token');
-    localStorage.removeItem('pinpic_user');
-    localStorage.removeItem('pinpic_device_id');
+
+    // 3. Clear Cache API if supported by the browser
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      try {
+        const cacheKeys = await window.caches.keys();
+        await Promise.all(cacheKeys.map((k) => window.caches.delete(k)));
+      } catch (err) {
+        console.warn('Failed to clear Cache API storage:', err);
+      }
+    }
+
+    // 4. Clear all browser storage (localStorage, sessionStorage)
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (err) {
+      console.warn('Failed to clear browser storage:', err);
+    }
+
+    // 5. Reset auth and onboarding React state
     setToken(null);
     setUser(null);
+    setHasCompletedOnboarding(false);
+
+    // 6. Notify repository listeners that local data has been wiped
+    notifyRepositoryChanged();
   };
 
   return (

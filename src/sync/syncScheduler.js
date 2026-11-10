@@ -108,6 +108,7 @@ export const syncScheduler = {
     }
     activeUserId = null;
     setSyncStatus(false);
+    syncEngine.cancelSync();
   },
 };
 
