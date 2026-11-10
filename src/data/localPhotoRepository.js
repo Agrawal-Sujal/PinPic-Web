@@ -50,6 +50,7 @@ export const localPhotoRepository = {
       ...p,
       name: p.photoName || p.name || 'Photo',
       photoId: p.globalPhotoId || String(p.localPhotoId),
+      clusterId: p.globalClusterId || (p.clusterId ? String(p.clusterId) : null),
       photoUrl: resolvePhotoUrl(p),
       downloadUrl: resolvePhotoUrl(p),
     }));
@@ -65,6 +66,7 @@ export const localPhotoRepository = {
       ...photo,
       name: photo.photoName || photo.name || 'Photo',
       photoId: photo.globalPhotoId || String(photo.localPhotoId),
+      clusterId: photo.globalClusterId || (photo.clusterId ? String(photo.clusterId) : null),
       photoUrl: resolvePhotoUrl(photo),
       downloadUrl: resolvePhotoUrl(photo),
     };
@@ -74,12 +76,20 @@ export const localPhotoRepository = {
    * Retrieve all photos belonging to a specific cluster
    */
   getPhotosOfCluster: async (clusterId) => {
-    const all = await db.photos.where('clusterId').equals(Number(clusterId)).toArray();
-    const photos = all.filter((p) => !p.isDeleted);
-    return photos.map((p) => ({
+    let photos = [];
+    const numId = Number(clusterId);
+    if (!isNaN(numId)) {
+      photos = await db.photos.where('clusterId').equals(numId).toArray();
+    }
+    if (photos.length === 0 && clusterId) {
+      photos = await db.photos.where('globalClusterId').equals(String(clusterId)).toArray();
+    }
+    const active = photos.filter((p) => !p.isDeleted);
+    return active.map((p) => ({
       ...p,
       name: p.photoName || p.name || 'Photo',
       photoId: p.globalPhotoId || String(p.localPhotoId),
+      clusterId: p.globalClusterId || (p.clusterId ? String(p.clusterId) : null),
       photoUrl: resolvePhotoUrl(p),
       downloadUrl: resolvePhotoUrl(p),
     }));
@@ -95,7 +105,10 @@ export const localPhotoRepository = {
 
     const activeClusters = await Promise.all(
       clusters.map(async (c) => {
-        const allClusterPhotos = await db.photos.where('clusterId').equals(c.localClusterId).toArray();
+        let allClusterPhotos = await db.photos.where('clusterId').equals(c.localClusterId).toArray();
+        if (allClusterPhotos.length === 0 && c.globalClusterId) {
+          allClusterPhotos = await db.photos.where('globalClusterId').equals(c.globalClusterId).toArray();
+        }
         const clusterPhotos = allClusterPhotos.filter((p) => !p.isDeleted);
 
         // Do not render empty clusters (all photos deleted)
@@ -112,6 +125,7 @@ export const localPhotoRepository = {
         const formattedPhotos = clusterPhotos.map((p) => ({
           ...p,
           photoId: p.globalPhotoId || String(p.localPhotoId),
+          clusterId: p.globalClusterId || (p.clusterId ? String(p.clusterId) : null),
           downloadUrl: resolvePhotoUrl(p),
           photoUrl: resolvePhotoUrl(p),
         }));
