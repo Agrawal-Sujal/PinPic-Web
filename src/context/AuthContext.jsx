@@ -27,8 +27,13 @@ export const AuthProvider = ({ children }) => {
     if (!token) return null;
     try {
       const profile = await userApi.getProfile();
+      const resolvedUserId = profile?.id || profile?.userId;
       setUser(prev => {
-        const updated = { ...prev, ...profile };
+        const updated = {
+          ...prev,
+          ...profile,
+          userId: resolvedUserId || prev?.userId,
+        };
         localStorage.setItem('pinpic_user', JSON.stringify(updated));
         return updated;
       });
@@ -43,10 +48,13 @@ export const AuthProvider = ({ children }) => {
     const initAuth = async () => {
       if (token) {
         const profile = await refreshProfile();
-        const currentUserId = profile?.userId || user?.userId;
+        const currentUserId =
+          profile?.id || profile?.userId || user?.userId || user?.id;
         if (currentUserId) {
           deviceService.getOrRegisterDeviceId(currentUserId).catch(() => {});
           syncScheduler.startPeriodicSync(currentUserId);
+        } else {
+          syncScheduler.startPeriodicSync();
         }
       }
       setLoading(false);

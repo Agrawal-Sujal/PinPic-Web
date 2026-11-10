@@ -14,6 +14,11 @@ db.version(2).stores({
   clusters: '++localClusterId, globalClusterId, visibility, isDeleted',
 });
 
+db.version(3).stores({
+  photos: '++localPhotoId, globalPhotoId, clusterId, globalClusterId, userId, visibility, takenAt, isDeleted',
+  clusters: '++localClusterId, globalClusterId, visibility, isDeleted',
+});
+
 /**
  * Metadata helpers
  */

@@ -4,10 +4,23 @@ const syncEventTarget = new EventTarget();
 const SYNC_STATUS_EVENT = 'pinpic_sync_status';
 
 let isSyncing = false;
+let isSyncQueued = false;
 let periodicIntervalId = null;
 let debounceTimeoutId = null;
 let activeUserId = null;
 let listenersAttached = false;
+
+const getFallbackUserId = () => {
+  if (activeUserId) return activeUserId;
+  try {
+    const saved = localStorage.getItem('pinpic_user');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return parsed.userId || parsed.id || null;
+    }
+  } catch (_) {}
+  return null;
+};
 
 const setSyncStatus = (status) => {
   if (isSyncing !== status) {
@@ -18,13 +31,13 @@ const setSyncStatus = (status) => {
 
 const handleOnlineEvent = () => {
   console.log('[SyncScheduler] Browser came online. Triggering sync...');
-  syncScheduler.scheduleSync();
+  syncScheduler.scheduleSync(getFallbackUserId());
 };
 
 const handleVisibilityChangeEvent = () => {
   if (document.visibilityState === 'visible') {
     console.log('[SyncScheduler] App tab became visible. Triggering sync...');
-    syncScheduler.scheduleSync();
+    syncScheduler.scheduleSync(getFallbackUserId());
   }
 };
 
@@ -48,6 +61,12 @@ export const syncScheduler = {
    */
   scheduleSync: (userId = null) => {
     if (userId) activeUserId = userId;
+    const resolvedUid = userId || getFallbackUserId();
+
+    if (isSyncing) {
+      isSyncQueued = true;
+      return;
+    }
 
     if (debounceTimeoutId) {
       clearTimeout(debounceTimeoutId);
@@ -56,11 +75,15 @@ export const syncScheduler = {
     debounceTimeoutId = setTimeout(async () => {
       setSyncStatus(true);
       try {
-        await syncEngine.executeSync(activeUserId);
+        await syncEngine.executeSync(resolvedUid);
       } finally {
         setSyncStatus(false);
+        if (isSyncQueued) {
+          isSyncQueued = false;
+          syncScheduler.scheduleSync(getFallbackUserId());
+        }
       }
-    }, 400);
+    }, 300);
   },
 
   /**
@@ -68,6 +91,7 @@ export const syncScheduler = {
    */
   startPeriodicSync: (userId = null) => {
     if (userId) activeUserId = userId;
+    const resolvedUid = activeUserId || getFallbackUserId();
 
     // Attach online and tab visibility listeners once
     if (!listenersAttached && typeof window !== 'undefined') {
@@ -77,15 +101,15 @@ export const syncScheduler = {
     }
 
     // Run immediate sync on start
-    syncScheduler.scheduleSync(activeUserId);
+    syncScheduler.scheduleSync(resolvedUid);
 
-    // Set recurring sync heartbeat (every 30 seconds)
+    // Set recurring sync heartbeat (every 15 seconds)
     if (!periodicIntervalId && typeof window !== 'undefined') {
       periodicIntervalId = setInterval(() => {
         if (!isSyncing && navigator.onLine) {
-          syncScheduler.scheduleSync(activeUserId);
+          syncScheduler.scheduleSync(getFallbackUserId());
         }
-      }, 30000);
+      }, 15000);
     }
   },
 
