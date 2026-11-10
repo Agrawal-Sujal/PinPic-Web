@@ -1,5 +1,6 @@
 import db from '../db/appDatabase';
 import syncScheduler from '../sync/syncScheduler';
+import exifr from 'exifr';
 
 // Custom event target for notifying UI when local data changes
 const eventTarget = new EventTarget();
@@ -47,6 +48,7 @@ export const localPhotoRepository = {
     photos.sort((a, b) => new Date(b.takenAt || 0) - new Date(a.takenAt || 0));
     return photos.map((p) => ({
       ...p,
+      name: p.photoName || p.name || 'Photo',
       photoId: p.globalPhotoId || String(p.localPhotoId),
       photoUrl: resolvePhotoUrl(p),
       downloadUrl: resolvePhotoUrl(p),
@@ -61,6 +63,7 @@ export const localPhotoRepository = {
     if (!photo || photo.isDeleted) return null;
     return {
       ...photo,
+      name: photo.photoName || photo.name || 'Photo',
       photoId: photo.globalPhotoId || String(photo.localPhotoId),
       photoUrl: resolvePhotoUrl(photo),
       downloadUrl: resolvePhotoUrl(photo),
@@ -75,6 +78,7 @@ export const localPhotoRepository = {
     const photos = all.filter((p) => !p.isDeleted);
     return photos.map((p) => ({
       ...p,
+      name: p.photoName || p.name || 'Photo',
       photoId: p.globalPhotoId || String(p.localPhotoId),
       photoUrl: resolvePhotoUrl(p),
       downloadUrl: resolvePhotoUrl(p),
@@ -266,6 +270,166 @@ export const localPhotoRepository = {
     notifyRepositoryChanged();
     syncScheduler.scheduleSync();
     return { clusterId: clusterLocalId, photoIds: insertedPhotoIds };
+  },
+
+  /**
+   * Import multiple photos at once with automatic EXIF GPS location detection,
+   * matching Android ImportPhotosUseCase.
+   *
+   * @param {File[]} files - Array of File objects selected by user
+   * @param {Object} options
+   * @param {Function} [options.onProgress] - Callback (current, total)
+   * @param {string} [options.userId] - Current user ID
+   * @param {string} [options.visibility] - Default 'PRIVATE'
+   */
+  importPhotos: async (files, { onProgress, userId, visibility = 'PRIVATE' } = {}) => {
+    if (!files || files.length === 0) return [];
+
+    const insertedPhotoIds = [];
+    const total = files.length;
+
+    for (let index = 0; index < total; index++) {
+      const file = files[index];
+      try {
+        let latitude = null;
+        let longitude = null;
+        let takenAt = null;
+
+        // 1. Try extracting EXIF GPS coordinates and taken date
+        try {
+          const exif = await exifr.parse(file, ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate']);
+          if (exif) {
+            if (
+              typeof exif.latitude === 'number' &&
+              typeof exif.longitude === 'number' &&
+              !isNaN(exif.latitude) &&
+              !isNaN(exif.longitude)
+            ) {
+              latitude = exif.latitude;
+              longitude = exif.longitude;
+            }
+
+            const rawDate = exif.DateTimeOriginal || exif.CreateDate;
+            if (rawDate) {
+              try {
+                takenAt = new Date(rawDate).toISOString();
+              } catch (_) {}
+            }
+          }
+        } catch (exifErr) {
+          console.warn('[localPhotoRepository] EXIF parse skipped for', file.name, exifErr);
+        }
+
+        // Fallback for takenAt: file lastModified, or current time
+        const now = new Date().toISOString();
+        if (!takenAt) {
+          takenAt = file.lastModified ? new Date(file.lastModified).toISOString() : now;
+        }
+
+        // 2. Resolve location (matching Android: if lat & lon exist, create Location; else null)
+        const location =
+          latitude !== null && longitude !== null
+            ? {
+                latitude,
+                longitude,
+                locationName: 'Unknown Location',
+                isEdited: false,
+              }
+            : null;
+
+        const photoName = file.name ? file.name.replace(/\.[^/.]+$/, '') : `Photo ${index + 1}`;
+        const previewUrl = URL.createObjectURL(file);
+
+        // 3. Database persistence with sync operation queue
+        if (location) {
+          // Photo has location: create 1-photo cluster and link photo (matching Android ImportPhotosUseCase)
+          await db.transaction('rw', [db.photos, db.clusters, db.syncOperations], async () => {
+            const isPublic = visibility === 'PUBLIC';
+            const isFriends = visibility === 'FRIENDS';
+            const isPrivate = visibility === 'PRIVATE';
+
+            const clusterId = await db.clusters.add({
+              location,
+              photoCount: 1,
+              visibility,
+              publicPhotoCount: isPublic ? 1 : 0,
+              friendPhotoCount: isFriends ? 1 : 0,
+              privatePhotoCount: isPrivate ? 1 : 0,
+            });
+
+            await db.syncOperations.add({
+              operationId: crypto.randomUUID(),
+              entityType: 'CLUSTER',
+              entityId: String(clusterId),
+              operation: 'ADD',
+              status: 'PENDING',
+              createdAt: now,
+            });
+
+            const photoId = await db.photos.add({
+              photoName,
+              clusterId,
+              userId: userId || 'unknown',
+              takenAt,
+              editedAt: now,
+              location,
+              visibility,
+              fileBlob: file,
+              previewUrl,
+            });
+
+            await db.clusters.update(clusterId, { thumbnailId: photoId });
+
+            await db.syncOperations.add({
+              operationId: crypto.randomUUID(),
+              entityType: 'PHOTOS',
+              entityId: String(photoId),
+              operation: 'ADD',
+              status: 'PENDING',
+              createdAt: now,
+            });
+
+            insertedPhotoIds.push(photoId);
+          });
+        } else {
+          // Photo does not have location: save directly without cluster
+          await db.transaction('rw', [db.photos, db.syncOperations], async () => {
+            const photoId = await db.photos.add({
+              photoName,
+              clusterId: null,
+              userId: userId || 'unknown',
+              takenAt,
+              editedAt: now,
+              location: null,
+              visibility,
+              fileBlob: file,
+              previewUrl,
+            });
+
+            await db.syncOperations.add({
+              operationId: crypto.randomUUID(),
+              entityType: 'PHOTOS',
+              entityId: String(photoId),
+              operation: 'ADD',
+              status: 'PENDING',
+              createdAt: now,
+            });
+
+            insertedPhotoIds.push(photoId);
+          });
+        }
+      } catch (err) {
+        console.error('[localPhotoRepository] Error importing photo:', file.name, err);
+      } finally {
+        if (onProgress) {
+          onProgress(index + 1, total);
+        }
+      }
+    }
+
+    notifyRepositoryChanged();
+    syncScheduler.scheduleSync();
+    return insertedPhotoIds;
   },
 
   /**
