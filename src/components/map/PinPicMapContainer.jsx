@@ -6,12 +6,21 @@ import { BBox } from '../../domain/map/GeoClusterIndex';
 // Controller to smoothly fly to updated center coordinates
 function MapCenterController({ center, zoom }) {
   const map = useMap();
-  const prevCenterRef = useRef(null);
+  const prevCenterRef = useRef(center);
+  const prevZoomRef = useRef(zoom);
 
   useEffect(() => {
-    if (center && (!prevCenterRef.current || prevCenterRef.current.lat !== center.lat || prevCenterRef.current.lng !== center.lng)) {
+    if (!center) return;
+    const centerChanged =
+      !prevCenterRef.current ||
+      prevCenterRef.current.lat !== center.lat ||
+      prevCenterRef.current.lng !== center.lng;
+    const zoomChanged = zoom !== undefined && zoom !== prevZoomRef.current;
+
+    if (centerChanged || zoomChanged) {
       prevCenterRef.current = center;
-      map.flyTo([center.lat, center.lng], zoom || map.getZoom(), { duration: 1.0 });
+      prevZoomRef.current = zoom;
+      map.flyTo([center.lat, center.lng], zoom ?? map.getZoom(), { duration: 1.0 });
     }
   }, [center, zoom, map]);
 

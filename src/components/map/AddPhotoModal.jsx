@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
-import exifr from 'exifr';
 import { X, Upload, MapPin, Calendar, Globe, Lock, Users, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { localPhotoRepository } from '../../data/localPhotoRepository';
+import { extractPhotoMetadata } from '../../utils/exifMetadata';
 
 export const AddPhotoModal = ({ isOpen, onClose, initialLocation, onPhotoUploaded }) => {
   const { user } = useAuth();
@@ -30,23 +30,22 @@ export const AddPhotoModal = ({ isOpen, onClose, initialLocation, onPhotoUploade
     setPreviewUrl(URL.createObjectURL(file));
     setName(file.name.replace(/\.[^/.]+$/, ''));
 
-    // Try extracting EXIF GPS coordinates and taken date
+    // Try extracting EXIF/XMP GPS coordinates and taken date
     try {
-      const output = await exifr.parse(file, ['latitude', 'longitude', 'DateTimeOriginal']);
-      if (output) {
-        if (output.latitude && output.longitude) {
-          setLatitude(output.latitude.toFixed(6));
-          setLongitude(output.longitude.toFixed(6));
-          showToast('Extracted GPS location from photo EXIF!', 'success');
-        }
-        if (output.DateTimeOriginal) {
-          try {
-            const d = new Date(output.DateTimeOriginal);
-            setTakenAt(d.toISOString().slice(0, 16));
-          } catch (err) {
-            console.warn('Could not parse EXIF date:', err);
-          }
-        }
+      const metadata = await extractPhotoMetadata(file);
+      if (metadata.latitude !== null && metadata.longitude !== null) {
+        setLatitude(metadata.latitude.toFixed(6));
+        setLongitude(metadata.longitude.toFixed(6));
+        showToast('Extracted GPS location from photo EXIF!', 'success');
+      }
+      if (metadata.dateObject) {
+        const d = metadata.dateObject;
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const hh = String(d.getHours()).padStart(2, '0');
+        const min = String(d.getMinutes()).padStart(2, '0');
+        setTakenAt(`${yyyy}-${mm}-${dd}T${hh}:${min}`);
       }
     } catch (err) {
       console.warn('No EXIF data found or failed to parse:', err);

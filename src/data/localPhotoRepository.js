@@ -1,6 +1,6 @@
 import db from '../db/appDatabase';
 import syncScheduler from '../sync/syncScheduler';
-import exifr from 'exifr';
+import { extractPhotoMetadata } from '../utils/exifMetadata';
 
 // Custom event target for notifying UI when local data changes
 const eventTarget = new EventTarget();
@@ -296,10 +296,11 @@ export const localPhotoRepository = {
    * @param {string} [options.userId] - Current user ID
    * @param {string} [options.visibility] - Default 'PRIVATE'
    */
-  importPhotos: async (files, { onProgress, userId, visibility = 'PRIVATE' } = {}) => {
+  importPhotos: async (files, { onProgress, onSummary, userId, visibility = 'PRIVATE' } = {}) => {
     if (!files || files.length === 0) return [];
 
     const insertedPhotoIds = [];
+    let pinnedCount = 0;
     const total = files.length;
 
     for (let index = 0; index < total; index++) {
@@ -309,26 +310,15 @@ export const localPhotoRepository = {
         let longitude = null;
         let takenAt = null;
 
-        // 1. Try extracting EXIF GPS coordinates and taken date
+        // 1. Try extracting EXIF/XMP GPS coordinates and taken date
         try {
-          const exif = await exifr.parse(file, ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate']);
-          if (exif) {
-            if (
-              typeof exif.latitude === 'number' &&
-              typeof exif.longitude === 'number' &&
-              !isNaN(exif.latitude) &&
-              !isNaN(exif.longitude)
-            ) {
-              latitude = exif.latitude;
-              longitude = exif.longitude;
-            }
-
-            const rawDate = exif.DateTimeOriginal || exif.CreateDate;
-            if (rawDate) {
-              try {
-                takenAt = new Date(rawDate).toISOString();
-              } catch (_) {}
-            }
+          const metadata = await extractPhotoMetadata(file);
+          if (metadata.latitude !== null && metadata.longitude !== null) {
+            latitude = metadata.latitude;
+            longitude = metadata.longitude;
+          }
+          if (metadata.takenAt) {
+            takenAt = metadata.takenAt;
           }
         } catch (exifErr) {
           console.warn('[localPhotoRepository] EXIF parse skipped for', file.name, exifErr);
@@ -404,6 +394,7 @@ export const localPhotoRepository = {
             });
 
             insertedPhotoIds.push(photoId);
+            pinnedCount += 1;
           });
         } else {
           // Photo does not have location: save directly without cluster
@@ -430,6 +421,7 @@ export const localPhotoRepository = {
             });
 
             insertedPhotoIds.push(photoId);
+            pinnedCount += 1;
           });
         }
       } catch (err) {
@@ -441,6 +433,9 @@ export const localPhotoRepository = {
       }
     }
 
+    if (onSummary) {
+      onSummary({ importedCount: insertedPhotoIds.length, pinnedCount });
+    }
     notifyRepositoryChanged();
     syncScheduler.scheduleSync();
     return insertedPhotoIds;

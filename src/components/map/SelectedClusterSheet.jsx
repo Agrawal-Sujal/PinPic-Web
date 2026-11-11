@@ -6,7 +6,9 @@ export const SelectedClusterSheet = ({ cluster, onClose, onSelectPhoto }) => {
 
   const photos = cluster.photos || [];
   const locationText = cluster.location?.locationName ||
-    (cluster.location?.latitude ? `${cluster.location.latitude.toFixed(4)}, ${cluster.location.longitude.toFixed(4)}` : 'Cluster location');
+    (cluster.location?.latitude != null && cluster.location?.longitude != null
+      ? `${cluster.location.latitude.toFixed(4)}, ${cluster.location.longitude.toFixed(4)}`
+      : 'Cluster location');
 
   return (
     <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in">

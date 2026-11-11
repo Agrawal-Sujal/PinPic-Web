@@ -143,14 +143,20 @@ export const GalleryPage = () => {
     });
 
     try {
+      let summary = { importedCount: 0, pinnedCount: 0 };
       const inserted = await localPhotoRepository.importPhotos(files, {
         onProgress: (current, total) => {
           setImportState((prev) => ({ ...prev, current, total }));
         },
+        onSummary: (res) => {
+          summary = res;
+        },
         userId: user?.userId,
       });
 
-      showToast(`Successfully imported ${inserted.length} photo(s)`, 'success');
+      const pinnedMsg =
+        summary.pinnedCount > 0 ? ` (${summary.pinnedCount} pinned on map)` : '';
+      showToast(`Successfully imported ${inserted.length} photo(s)${pinnedMsg}`, 'success');
       fetchPhotos();
     } catch (err) {
       console.error('Failed to import photos:', err);

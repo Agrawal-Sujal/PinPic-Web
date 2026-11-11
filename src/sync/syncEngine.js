@@ -4,6 +4,7 @@ import { photoApi } from '../api/photoApi';
 import { userApi } from '../api/userApi';
 import { deviceService } from '../services/deviceService';
 import { notifyRepositoryChanged } from '../data/localPhotoRepository';
+import { selectNextPendingOperation } from './syncOperationOrder';
 
 let isSyncRunning = false;
 let isSyncCancelled = false;
@@ -238,11 +239,17 @@ export const syncEngine = {
         break;
       }
 
-      const pendingBatch = await db.syncOperations
+      const allPendingOps = await db.syncOperations
         .where('status')
         .equals('PENDING')
-        .limit(batchSize)
         .toArray();
+
+      const nextOp = await selectNextPendingOperation(allPendingOps, {
+        getPhoto: (id) => db.photos.get(id),
+        getCluster: (id) => db.clusters.get(id),
+      });
+
+      const pendingBatch = nextOp ? [nextOp].slice(0, batchSize) : [];
 
       if (pendingBatch.length === 0) {
         console.log('[SyncEngine] All pending push operations processed.');
@@ -409,6 +416,10 @@ export const syncEngine = {
       }
 
       if (itemsToSend.length === 0) {
+        const currentOp = await db.syncOperations.get(pendingBatch[0].operationId);
+        if (currentOp?.status === 'COMPLETED') {
+          continue;
+        }
         break;
       }
 
