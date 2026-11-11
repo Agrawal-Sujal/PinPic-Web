@@ -3,7 +3,11 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
 }
 
 body {
@@ -91,4 +95,50 @@ body {
 .custom-cluster-marker:hover {
   transform: scale(1.15);
   z-index: 1000 !important;
+}
+
+/* Custom Cluster Radius Range Slider */
+.pinpic-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.pinpic-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #f56a41;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(245, 106, 65, 0.45);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pinpic-range-slider::-webkit-slider-thumb:hover,
+.pinpic-range-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.15);
+  box-shadow: 0 3px 10px rgba(245, 106, 65, 0.6);
+}
+
+.pinpic-range-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #f56a41;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(245, 106, 65, 0.45);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pinpic-range-slider::-moz-range-thumb:hover,
+.pinpic-range-slider:focus-visible::-moz-range-thumb {
+  transform: scale(1.15);
+  box-shadow: 0 3px 10px rgba(245, 106, 65, 0.6);
 }

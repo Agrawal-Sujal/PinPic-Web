@@ -3,12 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 import { userApi } from '../../api/userApi';
+import { useClusterRadius } from '../../hooks/useClusterRadius';
 import PinPicMapContainer from '../../components/map/PinPicMapContainer';
 import PinPicClusterMarker from '../../components/map/PinPicClusterMarker';
+import ClusterRadiusControl from '../../components/map/ClusterRadiusControl';
 import SelectedPhotoCard from '../../components/map/SelectedPhotoCard';
 import SelectedClusterSheet from '../../components/map/SelectedClusterSheet';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
-import MapClusteringSystem from '../../domain/map/MapClusteringSystem';
+import MapClusteringSystem, { createOverviewBoundsFit } from '../../domain/map/MapClusteringSystem';
 
 export const OtherUserMapPage = () => {
   const { userId } = useParams();
@@ -23,7 +25,9 @@ export const OtherUserMapPage = () => {
 
   const [mapCenter, setMapCenter] = useState({ lat: 20.5937, lng: 78.9629 });
   const [mapZoom, setMapZoom] = useState(5);
+  const [boundsFit, setBoundsFit] = useState(null);
   const lastCameraRef = useRef(null);
+  const hasAutoCenteredRef = useRef(false);
 
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedClusterDetail, setSelectedClusterDetail] = useState(null);
@@ -31,12 +35,15 @@ export const OtherUserMapPage = () => {
   const [fullScreenPhotos, setFullScreenPhotos] = useState([]);
   const [fullScreenIndex, setFullScreenIndex] = useState(0);
 
+  const { clusterRadius, ensureLoadedRadius, changeClusterRadius } = useClusterRadius();
+
   const fetchMapData = useCallback(async () => {
     try {
       setLoading(true);
-      const [profileRes, clustersRes] = await Promise.all([
+      const [profileRes, clustersRes, activeRadius] = await Promise.all([
         userApi.getUserProfile(userId).catch(() => null),
         userApi.getUserClusters(userId).catch(() => []),
+        ensureLoadedRadius(),
       ]);
 
       if (profileRes) setProfile(profileRes);
@@ -44,12 +51,14 @@ export const OtherUserMapPage = () => {
       setClustersData(clusters);
 
       // Build KD-Tree spatial index over other user's clusters
-      clusteringSystem.current.build(clusters, 40.0);
+      clusteringSystem.current.build(clusters, activeRadius);
 
-      if (clusters.length > 0 && clusters[0].location?.latitude != null && clusters[0].location?.longitude != null) {
-        const first = clusters[0].location;
-        setMapCenter({ lat: first.latitude, lng: first.longitude });
-        setMapZoom(13);
+      if (!hasAutoCenteredRef.current) {
+        const overviewBounds = createOverviewBoundsFit(clusters);
+        if (overviewBounds) {
+          hasAutoCenteredRef.current = true;
+          setBoundsFit(overviewBounds);
+        }
       }
 
       if (lastCameraRef.current) {
@@ -63,9 +72,28 @@ export const OtherUserMapPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [userId, showToast]);
+  }, [userId, showToast, ensureLoadedRadius]);
+
+  const handleClusterRadiusChange = useCallback(
+    (nextValue) => {
+      changeClusterRadius(nextValue, (nextRadius) => {
+        setSelectedNode(null);
+        setSelectedClusterDetail(null);
+
+        clusteringSystem.current.rebuild(nextRadius);
+
+        if (lastCameraRef.current) {
+          const { bbox, zoom } = lastCameraRef.current;
+          const nodes = clusteringSystem.current.getClusters(bbox, zoom);
+          setVisibleNodes(nodes);
+        }
+      });
+    },
+    [changeClusterRadius]
+  );
 
   useEffect(() => {
+    hasAutoCenteredRef.current = false;
     if (userId) fetchMapData();
   }, [userId, fetchMapData]);
 
@@ -121,24 +149,31 @@ export const OtherUserMapPage = () => {
 
   return (
     <div className="relative w-full h-screen overflow-hidden">
-      {/* Top Header Floating */}
-      <div className="absolute top-4 left-4 z-30 pointer-events-auto flex items-center gap-2">
-        <button
-          onClick={() => navigate(-1)}
-          className="p-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md hover:bg-black/5"
-          aria-label="Back"
-        >
-          <ArrowLeft className="w-5 h-5 text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark" />
-        </button>
+      {/* Top Header Floating & Cluster Radius Control */}
+      <div className="absolute top-4 left-4 z-30 flex flex-col items-start gap-2 pointer-events-none">
+        <div className="pointer-events-auto flex items-center gap-2">
+          <button
+            onClick={() => navigate(-1)}
+            className="p-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md hover:bg-black/5"
+            aria-label="Back"
+          >
+            <ArrowLeft className="w-5 h-5 text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark" />
+          </button>
 
-        <div className="flex items-center gap-2.5 px-4 py-2 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
-          <span className="text-xs font-bold truncate max-w-[150px]">
-            {profile ? `@${profile.username}'s Map` : 'User Map'}
-          </span>
-          <span className="text-[11px] font-semibold text-pinpic-teal dark:text-pinpic-teal-dark border-l border-pinpic-border-light pl-2">
-            {clustersData.length} clusters
-          </span>
+          <div className="flex items-center gap-2.5 px-4 py-2 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
+            <span className="text-xs font-bold truncate max-w-[150px]">
+              {profile ? `@${profile.username}'s Map` : 'User Map'}
+            </span>
+            <span className="text-[11px] font-semibold text-pinpic-teal dark:text-pinpic-teal-dark border-l border-pinpic-border-light pl-2">
+              {clustersData.length} clusters
+            </span>
+          </div>
         </div>
+
+        <ClusterRadiusControl
+          radius={clusterRadius}
+          onChange={handleClusterRadiusChange}
+        />
       </div>
 
       {/* Refresh Map Button */}
@@ -155,11 +190,12 @@ export const OtherUserMapPage = () => {
       <PinPicMapContainer
         center={mapCenter}
         zoom={mapZoom}
+        boundsFit={boundsFit}
         onCameraChange={handleCameraChange}
       >
         {visibleNodes.map((node) => (
           <PinPicClusterMarker
-            key={`cluster-${node.id}`}
+            key={`cluster-${clusterRadius}-${node.id}`}
             node={node}
             isSelected={selectedNode?.id === node.id}
             onClick={handleNodeClick}

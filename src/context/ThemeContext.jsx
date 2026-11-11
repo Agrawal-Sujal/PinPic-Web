@@ -1,16 +1,42 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const ThemeContext = createContext();
 
-export const ThemeProvider = ({ children }) => {
-  const [themeMode, setThemeMode] = useState(() => {
-    return localStorage.getItem('pinpic_theme_mode') || 'system';
-  });
+const THEME_STORAGE_KEY = 'pinpic_theme_mode';
+const THEME_EXPLICIT_KEY = 'pinpic_theme_explicit';
+const VALID_THEMES = ['light', 'dark', 'system'];
+const DEFAULT_THEME = 'light';
 
+const getInitialThemeMode = () => {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (!VALID_THEMES.includes(saved)) return DEFAULT_THEME;
+    // Earlier builds auto-wrote 'system' on first load; keep light as default unless explicitly chosen
+    if (saved === 'system' && localStorage.getItem(THEME_EXPLICIT_KEY) !== 'true') {
+      return DEFAULT_THEME;
+    }
+    return saved;
+  } catch {
+    return DEFAULT_THEME;
+  }
+};
+
+export const ThemeProvider = ({ children }) => {
+  const [themeMode, setThemeModeState] = useState(getInitialThemeMode);
   const [resolvedDark, setResolvedDark] = useState(false);
 
+  const setThemeMode = useCallback((nextMode) => {
+    const resolved = VALID_THEMES.includes(nextMode) ? nextMode : DEFAULT_THEME;
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, resolved);
+      localStorage.setItem(THEME_EXPLICIT_KEY, 'true');
+    } catch {
+      // Ignore storage failures in restricted contexts
+    }
+    setThemeModeState(resolved);
+  }, []);
+
   useEffect(() => {
-    localStorage.setItem('pinpic_theme_mode', themeMode);
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
     const applyTheme = () => {
@@ -22,6 +48,7 @@ export const ThemeProvider = ({ children }) => {
       }
 
       setResolvedDark(isDark);
+      document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
       if (isDark) {
         document.documentElement.classList.add('dark');
       } else {

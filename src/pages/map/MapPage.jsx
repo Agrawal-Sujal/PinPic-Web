@@ -4,9 +4,11 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { localPhotoRepository } from '../../data/localPhotoRepository';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
+import { useClusterRadius } from '../../hooks/useClusterRadius';
 import PinPicMapContainer from '../../components/map/PinPicMapContainer';
 import PinPicClusterMarker from '../../components/map/PinPicClusterMarker';
 import DroppedPinMarker from '../../components/map/DroppedPinMarker';
+import ClusterRadiusControl from '../../components/map/ClusterRadiusControl';
 import SelectedPhotoCard from '../../components/map/SelectedPhotoCard';
 import SelectedClusterSheet from '../../components/map/SelectedClusterSheet';
 import AddPhotoBottomSheet from '../../components/map/AddPhotoBottomSheet';
@@ -14,7 +16,7 @@ import DatePickerModal from '../../components/map/DatePickerModal';
 import TimePickerModal from '../../components/map/TimePickerModal';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
 import LogoHeader from '../../components/common/LogoHeader';
-import MapClusteringSystem from '../../domain/map/MapClusteringSystem';
+import MapClusteringSystem, { createOverviewBoundsFit } from '../../domain/map/MapClusteringSystem';
 
 export const MapPage = () => {
   const { user } = useAuth();
@@ -28,6 +30,7 @@ export const MapPage = () => {
   // Map state
   const [mapCenter, setMapCenter] = useState({ lat: 20.5937, lng: 78.9629 });
   const [mapZoom, setMapZoom] = useState(5);
+  const [boundsFit, setBoundsFit] = useState(null);
   const lastCameraRef = useRef(null);
   const hasAutoCenteredRef = useRef(false);
 
@@ -51,27 +54,27 @@ export const MapPage = () => {
   const [fullScreenIndex, setFullScreenIndex] = useState(0);
 
   const { isSyncing, triggerSync } = useSyncStatus();
+  const { clusterRadius, ensureLoadedRadius, changeClusterRadius } = useClusterRadius();
 
   // Fetch clusters from local database and build hierarchical KD-Tree spatial index
   const fetchAndIndexClusters = useCallback(async () => {
     try {
       setLoading(true);
-      const clusters = await localPhotoRepository.getUnMergedClusters();
+      const [clusters, activeRadius] = await Promise.all([
+        localPhotoRepository.getUnMergedClusters(),
+        ensureLoadedRadius(),
+      ]);
       setClustersData(clusters);
 
-      // Build GeoClusterIndex with KD-Tree
-      clusteringSystem.current.build(clusters, 40.0);
+      // Build GeoClusterIndex with KD-Tree using current/saved radius
+      clusteringSystem.current.build(clusters, activeRadius);
 
-      // Center once on the latest cluster with valid coordinates if camera hasn't been auto-centered yet
+      // Fit camera bounds once across all clusters so all photos are covered without zooming into a single photo
       if (!hasAutoCenteredRef.current) {
-        const targetCluster = [...clusters]
-          .reverse()
-          .find((c) => c.location?.latitude != null && c.location?.longitude != null);
-        if (targetCluster) {
+        const overviewBounds = createOverviewBoundsFit(clusters);
+        if (overviewBounds) {
           hasAutoCenteredRef.current = true;
-          const { latitude, longitude } = targetCluster.location;
-          setMapCenter({ lat: latitude, lng: longitude });
-          setMapZoom(13);
+          setBoundsFit(overviewBounds);
         }
       }
 
@@ -87,7 +90,25 @@ export const MapPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, ensureLoadedRadius]);
+
+  const handleClusterRadiusChange = useCallback(
+    (nextValue) => {
+      changeClusterRadius(nextValue, (nextRadius) => {
+        setSelectedNode(null);
+        setSelectedClusterDetail(null);
+
+        clusteringSystem.current.rebuild(nextRadius);
+
+        if (lastCameraRef.current) {
+          const { bbox, zoom } = lastCameraRef.current;
+          const nodes = clusteringSystem.current.getClusters(bbox, zoom);
+          setVisibleNodes(nodes);
+        }
+      });
+    },
+    [changeClusterRadius]
+  );
 
   useEffect(() => {
     fetchAndIndexClusters();
@@ -348,19 +369,26 @@ export const MapPage = () => {
 
   return (
     <div className="relative w-full h-screen overflow-hidden">
-      {/* Floating Top Header */}
-      <div className="absolute top-4 left-4 z-30 pointer-events-auto">
+      {/* Floating Top Header & Cluster Radius Control */}
+      <div className="absolute top-4 left-4 z-30 flex flex-col items-start gap-2 pointer-events-none">
         {addPhotoMode === 'NONE' ? (
-          <div className="flex items-center gap-2 px-3.5 py-2 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
-            <LogoHeader size="sm" />
-            <span className="text-xs font-bold text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark border-l border-pinpic-border-light dark:border-pinpic-outline-dark pl-2">
-              {clustersData.length} Clusters
-            </span>
-          </div>
+          <>
+            <div className="pointer-events-auto flex items-center gap-2 px-3.5 py-2 rounded-full backdrop-blur-md bg-pinpic-surface-light/90 dark:bg-pinpic-surface-container-dark/90 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md">
+              <LogoHeader size="sm" />
+              <span className="text-xs font-bold text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark border-l border-pinpic-border-light dark:border-pinpic-outline-dark pl-2">
+                {clustersData.length} Clusters
+              </span>
+            </div>
+
+            <ClusterRadiusControl
+              radius={clusterRadius}
+              onChange={handleClusterRadiusChange}
+            />
+          </>
         ) : (
           <button
             onClick={handleCancelAddPhoto}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md text-pinpic-coral hover:bg-black/5 dark:hover:bg-white/5 active:scale-95 transition-all"
+            className="pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-full backdrop-blur-md bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-md text-pinpic-coral hover:bg-black/5 dark:hover:bg-white/5 active:scale-95 transition-all"
             title="Cancel Add Photo"
           >
             <X className="w-4 h-4 stroke-[2.5]" />
@@ -416,13 +444,14 @@ export const MapPage = () => {
       <PinPicMapContainer
         center={mapCenter}
         zoom={mapZoom}
+        boundsFit={boundsFit}
         isSelectingLocation={addPhotoMode === 'SELECT_LOCATION' || addPhotoMode === 'LOCATION_SELECTED'}
         onCameraChange={handleCameraChange}
         onMapClick={handleMapClick}
       >
         {visibleNodes.map((node) => (
           <PinPicClusterMarker
-            key={`cluster-${node.id}`}
+            key={`cluster-${clusterRadius}-${node.id}`}
             node={node}
             isSelected={selectedNode?.id === node.id}
             onClick={handleNodeClick}
