@@ -104,8 +104,8 @@ export class GeoClusterIndex {
     const count =
       point.photoCount > 0 ? point.photoCount : point.photos?.length > 0 ? point.photos.length : 1;
 
-    const lat = point.location?.latitude || point.lat || 0;
-    const lon = point.location?.longitude || point.lon || point.lng || 0;
+    const lat = point.location?.latitude ?? point.lat ?? 0;
+    const lon = point.location?.longitude ?? point.lon ?? point.lng ?? 0;
     const thumb =
       point.thumbnail?.photoUrl ||
       point.thumbnailUrl ||
@@ -172,8 +172,8 @@ export class GeoClusterIndex {
 
     let current = points
       .map((p) => {
-        const lat = p.location?.latitude || p.lat;
-        const lon = p.location?.longitude || p.lon || p.lng;
+        const lat = p.location?.latitude ?? p.lat;
+        const lon = p.location?.longitude ?? p.lon ?? p.lng;
         if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) return null;
 
         const count =

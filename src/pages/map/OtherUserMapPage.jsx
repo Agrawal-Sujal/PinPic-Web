@@ -46,7 +46,7 @@ export const OtherUserMapPage = () => {
       // Build KD-Tree spatial index over other user's clusters
       clusteringSystem.current.build(clusters, 40.0);
 
-      if (clusters.length > 0 && clusters[0].location?.latitude) {
+      if (clusters.length > 0 && clusters[0].location?.latitude != null && clusters[0].location?.longitude != null) {
         const first = clusters[0].location;
         setMapCenter({ lat: first.latitude, lng: first.longitude });
         setMapZoom(13);

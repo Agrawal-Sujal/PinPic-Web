@@ -29,6 +29,7 @@ export const MapPage = () => {
   const [mapCenter, setMapCenter] = useState({ lat: 20.5937, lng: 78.9629 });
   const [mapZoom, setMapZoom] = useState(5);
   const lastCameraRef = useRef(null);
+  const hasAutoCenteredRef = useRef(false);
 
   // Selection state
   const [selectedNode, setSelectedNode] = useState(null);
@@ -61,11 +62,17 @@ export const MapPage = () => {
       // Build GeoClusterIndex with KD-Tree
       clusteringSystem.current.build(clusters, 40.0);
 
-      // Center on first cluster if exists and camera hasn't been set yet
-      if (clusters.length > 0 && clusters[0].location?.latitude && !lastCameraRef.current) {
-        const first = clusters[0].location;
-        setMapCenter({ lat: first.latitude, lng: first.longitude });
-        setMapZoom(13);
+      // Center once on the latest cluster with valid coordinates if camera hasn't been auto-centered yet
+      if (!hasAutoCenteredRef.current) {
+        const targetCluster = [...clusters]
+          .reverse()
+          .find((c) => c.location?.latitude != null && c.location?.longitude != null);
+        if (targetCluster) {
+          hasAutoCenteredRef.current = true;
+          const { latitude, longitude } = targetCluster.location;
+          setMapCenter({ lat: latitude, lng: longitude });
+          setMapZoom(13);
+        }
       }
 
       // Re-query current camera if already loaded
@@ -313,6 +320,7 @@ export const MapPage = () => {
       showToast(`Pinned ${count} photo${count > 1 ? 's' : ''}! Syncing in background...`, 'success');
 
       // Refresh clusters locally & pan camera immediately
+      hasAutoCenteredRef.current = true;
       await fetchAndIndexClusters();
       setMapCenter({ lat: selectedAddPhotoLocation.lat, lng: selectedAddPhotoLocation.lng });
       setMapZoom(15);

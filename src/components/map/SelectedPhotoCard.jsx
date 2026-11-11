@@ -7,7 +7,9 @@ export const SelectedPhotoCard = ({ photo, onClose, onViewFull }) => {
 
   const photoDate = photo.takenAt ? new Date(photo.takenAt) : null;
   const locationText = photo.location?.locationName ||
-    (photo.location?.latitude ? `${photo.location.latitude.toFixed(4)}, ${photo.location.longitude.toFixed(4)}` : 'Unknown location');
+    (photo.location?.latitude != null && photo.location?.longitude != null
+      ? `${photo.location.latitude.toFixed(4)}, ${photo.location.longitude.toFixed(4)}`
+      : 'Unknown location');
 
   return (
     <div className="absolute bottom-24 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-30 bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark rounded-3xl p-4 shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-5">
