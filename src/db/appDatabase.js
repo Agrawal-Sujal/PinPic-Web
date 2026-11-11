@@ -1,4 +1,5 @@
 import Dexie from 'dexie';
+import { DEFAULT_CLUSTER_RADIUS, normalizeClusterRadius } from '../domain/map/MapClusteringSystem';
 
 export const db = new Dexie('PinPicDatabase');
 
@@ -18,6 +19,12 @@ db.version(3).stores({
   photos: '++localPhotoId, globalPhotoId, clusterId, globalClusterId, userId, visibility, takenAt, isDeleted',
   clusters: '++localClusterId, globalClusterId, visibility, isDeleted',
 });
+
+db.version(4).stores({
+  settings: 'key',
+});
+
+export const CLUSTER_RADIUS_SETTING_KEY = 'clusterRadius';
 
 /**
  * Metadata helpers
@@ -41,6 +48,38 @@ export const setSyncMetadata = async (key, value) => {
 };
 
 /**
+ * Local application settings helpers
+ */
+export const getSetting = async (key, defaultValue = null) => {
+  try {
+    const record = await db.settings.get(key);
+    return record ? record.value : defaultValue;
+  } catch (err) {
+    console.error(`Error reading setting [${key}]:`, err);
+    return defaultValue;
+  }
+};
+
+export const setSetting = async (key, value) => {
+  try {
+    await db.settings.put({ key, value });
+  } catch (err) {
+    console.error(`Error writing setting [${key}]:`, err);
+  }
+};
+
+export const getClusterRadius = async () => {
+  const saved = await getSetting(CLUSTER_RADIUS_SETTING_KEY, DEFAULT_CLUSTER_RADIUS);
+  return normalizeClusterRadius(saved);
+};
+
+export const setClusterRadius = async (radius) => {
+  const normalized = normalizeClusterRadius(radius);
+  await setSetting(CLUSTER_RADIUS_SETTING_KEY, normalized);
+  return normalized;
+};
+
+/**
  * Clears all user-specific data from local database (used on logout)
  */
 export const clearLocalDatabase = async () => {
@@ -52,7 +91,7 @@ export const clearLocalDatabase = async () => {
     const tableList =
       db.tables?.length > 0
         ? db.tables
-        : [db.photos, db.clusters, db.syncOperations, db.syncMetadata].filter(Boolean);
+        : [db.photos, db.clusters, db.syncOperations, db.syncMetadata, db.settings].filter(Boolean);
 
     await Promise.all(
       tableList.map(async (table) => {

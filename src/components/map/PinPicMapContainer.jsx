@@ -1,7 +1,49 @@
 import React, { useEffect, useRef } from 'react';
+import L from 'leaflet';
 import { MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { useTheme } from '../../context/ThemeContext';
 import { BBox } from '../../domain/map/GeoClusterIndex';
+
+// Controller to fit map bounds across all visible photo clusters without over-zooming
+function MapBoundsController({ boundsFit }) {
+  const map = useMap();
+  const lastFitKeyRef = useRef(null);
+
+  useEffect(() => {
+    if (!boundsFit?.points || boundsFit.points.length === 0) return;
+    if (boundsFit.key != null && lastFitKeyRef.current === boundsFit.key) return;
+
+    const leafletBounds = L.latLngBounds(boundsFit.points);
+    if (!leafletBounds.isValid()) return;
+
+    const size = map.getSize();
+    if (!size || size.x <= 0 || size.y <= 0) return;
+
+    lastFitKeyRef.current = boundsFit.key;
+
+    const sw = leafletBounds.getSouthWest();
+    const ne = leafletBounds.getNorthEast();
+    const animate = boundsFit.animate ?? false;
+
+    if (sw.equals(ne)) {
+      map.setView(sw, boundsFit.singlePointZoom ?? 5, { animate });
+      return;
+    }
+
+    const padX = Math.min(56, Math.floor(size.x * 0.15));
+    const padTop = Math.min(96, Math.floor(size.y * 0.18));
+    const padBottom = Math.min(104, Math.floor(size.y * 0.2));
+
+    map.fitBounds(leafletBounds, {
+      paddingTopLeft: [padX, padTop],
+      paddingBottomRight: [padX, padBottom],
+      maxZoom: boundsFit.maxZoom ?? 8,
+      animate,
+    });
+  }, [boundsFit, map]);
+
+  return null;
+}
 
 // Controller to smoothly fly to updated center coordinates
 function MapCenterController({ center, zoom }) {
@@ -80,6 +122,7 @@ function MapEventsHandler({ onCameraChange, onMapClick }) {
 export const PinPicMapContainer = ({
   center = { lat: 20.5937, lng: 78.9629 },
   zoom = 5,
+  boundsFit = null,
   isSelectingLocation = false,
   onCameraChange,
   onMapClick,
@@ -144,6 +187,7 @@ export const PinPicMapContainer = ({
           maxZoom={20}
         />
 
+        <MapBoundsController boundsFit={boundsFit} />
         <MapCenterController center={center} zoom={zoom} />
         <MapEventsHandler onCameraChange={onCameraChange} onMapClick={onMapClick} />
         {children}
