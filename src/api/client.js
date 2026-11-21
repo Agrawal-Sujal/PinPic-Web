@@ -27,8 +27,7 @@ api.interceptors.response.use(
   async (error) => {
     if (error.response && error.response.status === 401) {
       const isAuthRoute = window.location.pathname.startsWith('/login') ||
-                          window.location.pathname.startsWith('/signup') ||
-                          window.location.pathname.startsWith('/onboarding');
+                          window.location.pathname.startsWith('/signup');
       if (!isAuthRoute) {
         try {
           await clearLocalDatabase();

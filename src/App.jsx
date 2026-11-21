@@ -8,7 +8,6 @@ import LoadingSpinner from './components/common/LoadingSpinner';
 import Login from './pages/auth/Login';
 import SignUp from './pages/auth/SignUp';
 import UsernameSetup from './pages/auth/UsernameSetup';
-import Onboarding from './pages/onboarding/Onboarding';
 import MapPage from './pages/map/MapPage';
 import OtherUserMapPage from './pages/map/OtherUserMapPage';
 import GalleryPage from './pages/gallery/GalleryPage';
@@ -21,7 +20,7 @@ import SettingsPage from './pages/settings/SettingsPage';
 
 // Protected Route Guard
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading, user, hasCompletedOnboarding } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -39,11 +38,6 @@ const ProtectedRoute = ({ children }) => {
   // Force username setup if missing
   if (!user?.username && location.pathname !== '/setup-username') {
     return <Navigate to="/setup-username" replace />;
-  }
-
-  // Force onboarding for first-time login
-  if (!hasCompletedOnboarding && location.pathname !== '/onboarding' && location.pathname !== '/setup-username') {
-    return <Navigate to="/onboarding" replace />;
   }
 
   return children;
@@ -82,7 +76,7 @@ export function App() {
         element={isAuthenticated ? <Navigate to="/map" replace /> : <SignUp />}
       />
 
-      {/* Onboarding & Username Setup */}
+      {/* Username Setup */}
       <Route
         path="/setup-username"
         element={
@@ -93,11 +87,7 @@ export function App() {
       />
       <Route
         path="/onboarding"
-        element={
-          <ProtectedRoute>
-            <Onboarding />
-          </ProtectedRoute>
-        }
+        element={<Navigate to="/map" replace />}
       />
 
       {/* Main Tab Routes (with Bottom Navigation) */}

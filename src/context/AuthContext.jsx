@@ -19,9 +19,7 @@ export const AuthProvider = ({ children }) => {
     }
   });
   const [loading, setLoading] = useState(true);
-  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(() => {
-    return localStorage.getItem('pinpic_onboarded') === 'true';
-  });
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
 
   const refreshProfile = useCallback(async () => {
     if (!token) return null;
@@ -139,10 +137,10 @@ export const AuthProvider = ({ children }) => {
       console.warn('Failed to clear browser storage:', err);
     }
 
-    // 5. Reset auth and onboarding React state
+    // 5. Reset auth state
     setToken(null);
     setUser(null);
-    setHasCompletedOnboarding(false);
+    setHasCompletedOnboarding(true);
 
     // 6. Notify repository listeners that local data has been wiped
     notifyRepositoryChanged();
