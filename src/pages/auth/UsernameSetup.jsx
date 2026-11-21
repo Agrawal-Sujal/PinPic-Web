@@ -9,7 +9,7 @@ export const UsernameSetup = () => {
   const [username, setUsernameInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const { setUsername, hasCompletedOnboarding } = useAuth();
+  const { setUsername } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -33,11 +33,7 @@ export const UsernameSetup = () => {
       setSubmitting(true);
       await setUsername(cleanUsername);
       showToast('Username set successfully!', 'success');
-      if (!hasCompletedOnboarding) {
-        navigate('/onboarding');
-      } else {
-        navigate('/map');
-      }
+      navigate('/map');
     } catch (err) {
       const errMsg = err.response?.data?.message || err.response?.data || 'Failed to set username';
       showToast(typeof errMsg === 'string' ? errMsg : 'Username might be taken', 'error');
