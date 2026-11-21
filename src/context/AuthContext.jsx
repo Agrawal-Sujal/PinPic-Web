@@ -4,7 +4,7 @@ import { userApi } from '../api/userApi';
 import { clearLocalDatabase } from '../db/appDatabase';
 import syncScheduler from '../sync/syncScheduler';
 import deviceService from '../services/deviceService';
-import { notifyRepositoryChanged } from '../data/localPhotoRepository';
+import { notifyRepositoryChanged, clearBlobUrlCache } from '../data/localPhotoRepository';
 
 const AuthContext = createContext();
 
@@ -117,8 +117,9 @@ export const AuthProvider = ({ children }) => {
     // 1. Stop background sync and cancel running sync operations
     syncScheduler.stopPeriodicSync();
 
-    // 2. Clear all tables in local IndexedDB database
+    // 2. Clear all tables in local IndexedDB database and revoke cached blob URLs
     await clearLocalDatabase();
+    clearBlobUrlCache();
 
     // 3. Clear Cache API if supported by the browser
     if (typeof window !== 'undefined' && 'caches' in window) {
