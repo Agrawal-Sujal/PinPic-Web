@@ -10,19 +10,57 @@ export const notifyRepositoryChanged = () => {
   eventTarget.dispatchEvent(new Event(REPOSITORY_CHANGE_EVENT));
 };
 
+const blobUrlCache = new Map();
+
+/**
+ * Revokes an existing object URL from memory and removes it from the cache
+ */
+export const revokeBlobUrl = (key) => {
+  if (!key) return;
+  const url = blobUrlCache.get(String(key));
+  if (url) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+    blobUrlCache.delete(String(key));
+  }
+};
+
+/**
+ * Revokes all cached object URLs (e.g. on logout)
+ */
+export const clearBlobUrlCache = () => {
+  blobUrlCache.forEach((url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  });
+  blobUrlCache.clear();
+};
+
 /**
  * Helper to resolve photo display URL:
- * Prefers downloadUrl (from cloud) -> fileBlob ObjectURL -> previewUrl
+ * Prefers local fileBlob ObjectURL (cached in IndexedDB) -> downloadUrl (from cloud) -> previewUrl
  */
 export const resolvePhotoUrl = (photo) => {
   if (!photo) return null;
-  if (photo.downloadUrl) return photo.downloadUrl;
+  // 1. Prefer local binary Blob cached/stored in IndexedDB
   if (photo.fileBlob) {
-    if (!photo._createdBlobUrl) {
-      photo._createdBlobUrl = URL.createObjectURL(photo.fileBlob);
+    const key = String(photo.localPhotoId || photo.globalPhotoId || '');
+    if (key && blobUrlCache.has(key)) {
+      return blobUrlCache.get(key);
     }
-    return photo._createdBlobUrl;
+    try {
+      const url = URL.createObjectURL(photo.fileBlob);
+      if (key) blobUrlCache.set(key, url);
+      return url;
+    } catch (err) {
+      console.warn('Failed to create object URL from fileBlob:', err);
+    }
   }
+  // 2. Fall back to remote downloadUrl if not yet cached in IndexedDB
+  if (photo.downloadUrl) return photo.downloadUrl;
+  // 3. Fall back to temporary previewUrl
   return photo.previewUrl || null;
 };
 
@@ -547,13 +585,18 @@ export const localPhotoRepository = {
           createdAt: now,
         });
 
-        // Revoke any temporary object URL
+        // Revoke any temporary object URL and release memory
+        if (photo.localPhotoId) revokeBlobUrl(photo.localPhotoId);
+        if (photo.globalPhotoId) revokeBlobUrl(photo.globalPhotoId);
         if (photo._createdBlobUrl) {
-          URL.revokeObjectURL(photo._createdBlobUrl);
+          try {
+            URL.revokeObjectURL(photo._createdBlobUrl);
+          } catch (_) {}
         }
 
         // Soft delete photo locally (preserves record until synced to backend)
-        await db.photos.update(photo.localPhotoId, { isDeleted: true });
+        // Immediately release fileBlob from IndexedDB to free local storage
+        await db.photos.update(photo.localPhotoId, { isDeleted: true, fileBlob: null });
       }
 
       // Cleanup affected clusters

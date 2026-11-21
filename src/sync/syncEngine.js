@@ -3,11 +3,30 @@ import { syncApi } from '../api/syncApi';
 import { photoApi } from '../api/photoApi';
 import { userApi } from '../api/userApi';
 import { deviceService } from '../services/deviceService';
-import { notifyRepositoryChanged } from '../data/localPhotoRepository';
+import { notifyRepositoryChanged, revokeBlobUrl } from '../data/localPhotoRepository';
 import { selectNextPendingOperation } from './syncOperationOrder';
 
 let isSyncRunning = false;
 let isSyncCancelled = false;
+
+/**
+ * Helper to download an image binary Blob from a URL (e.g. presigned S3 URL)
+ */
+export const downloadImageBlob = async (url) => {
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[SyncEngine] HTTP ${res.status} when fetching image from ${url}`);
+      return null;
+    }
+    const blob = await res.blob();
+    return blob && blob.size > 0 ? blob : null;
+  } catch (err) {
+    console.warn('[SyncEngine] Error downloading image blob:', err);
+    return null;
+  }
+};
 
 export const syncEngine = {
   /**
@@ -60,6 +79,10 @@ export const syncEngine = {
 
       // Phase 3: Reconciliation check for any unclustered or desynced photos
       await syncEngine.reconcileUnclusteredPhotos(userId);
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
+
+      // Phase 4: Download and cache image binary Blobs into IndexedDB for any cloud photos
+      await syncEngine.cachePendingPhotosBlobs();
 
       console.log('[SyncEngine] Synchronization cycle completed successfully.');
       return true;
@@ -211,6 +234,11 @@ export const syncEngine = {
             `[SyncEngine] Bootstrapped ${cloudClusters?.length || 0} clusters and ${cloudPhotos?.length || 0} photos.`
           );
           notifyRepositoryChanged();
+
+          // Background cache image blobs for bootstrapped photos into IndexedDB
+          syncEngine.cachePendingPhotosBlobs().catch((err) => {
+            console.warn('[SyncEngine] Background bootstrap blob caching error:', err);
+          });
         }
       }
     } catch (err) {
@@ -220,7 +248,7 @@ export const syncEngine = {
 
   /**
    * Phase 1: Push pending local operations to backend /api/sync/batch
-   * Uses sequential batchSize = 1 (matching Android SyncWorker) so that
+   * Uses sequential batchSize = 50 (matching Android SyncWorker) so that
    * CLUSTER operations complete and populate globalClusterId before dependent PHOTOS sync.
    */
   pushLocalChanges: async (deviceId) => {
@@ -231,7 +259,7 @@ export const syncEngine = {
       .modify({ status: 'PENDING' })
       .catch(() => {});
 
-    const batchSize = 1;
+    const batchSize = 50;
 
     while (true) {
       if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
@@ -397,6 +425,7 @@ export const syncEngine = {
             const globalPhotoId = photo?.globalPhotoId;
             if (!globalPhotoId) {
               // Never synced to cloud, permanently purge from local DB
+              revokeBlobUrl(localId);
               if (photo) await db.photos.delete(localId);
               await db.syncOperations.update(op.operationId, { status: 'COMPLETED' });
               continue;
@@ -454,6 +483,7 @@ export const syncEngine = {
           } else if (entityType === 'PHOTOS') {
             if (isDelete) {
               // Now that cloud deletion is confirmed, permanently remove from local DB
+              revokeBlobUrl(localEntityId);
               await db.photos.delete(localEntityId);
             } else if (res.globalId) {
               await db.photos.update(localEntityId, { globalPhotoId: res.globalId });
@@ -558,6 +588,17 @@ export const syncEngine = {
                 }
                 if (op.downloadUrl && existing.downloadUrl !== op.downloadUrl) {
                   updates.downloadUrl = op.downloadUrl;
+                  const newBlob = await downloadImageBlob(op.downloadUrl);
+                  if (newBlob) {
+                    updates.fileBlob = newBlob;
+                    revokeBlobUrl(existing.localPhotoId);
+                    revokeBlobUrl(existing.globalPhotoId);
+                  }
+                } else if (!existing.fileBlob && op.downloadUrl) {
+                  const newBlob = await downloadImageBlob(op.downloadUrl);
+                  if (newBlob) {
+                    updates.fileBlob = newBlob;
+                  }
                 }
                 if (op.photo?.editedAt && existing.editedAt !== op.photo.editedAt) {
                   updates.editedAt = op.photo.editedAt;
@@ -567,6 +608,10 @@ export const syncEngine = {
                   anyChangesApplied = true;
                 }
               } else {
+                let fileBlob = null;
+                if (op.downloadUrl) {
+                  fileBlob = await downloadImageBlob(op.downloadUrl);
+                }
                 await db.photos.add({
                   globalPhotoId,
                   clusterId: clusterLocalId,
@@ -579,12 +624,20 @@ export const syncEngine = {
                   location: op.photo?.location || null,
                   visibility: op.photo?.visibility || 'PRIVATE',
                   downloadUrl: op.downloadUrl || null,
+                  fileBlob: fileBlob || null,
                 });
                 anyChangesApplied = true;
               }
             } else if (operation === 'DELETE') {
               const photo = await db.photos.where('globalPhotoId').equals(globalPhotoId).first();
               if (photo) {
+                revokeBlobUrl(photo.localPhotoId);
+                revokeBlobUrl(photo.globalPhotoId);
+                if (photo._createdBlobUrl) {
+                  try {
+                    URL.revokeObjectURL(photo._createdBlobUrl);
+                  } catch (_) {}
+                }
                 await db.photos.delete(photo.localPhotoId);
                 anyChangesApplied = true;
               }
@@ -760,6 +813,49 @@ export const syncEngine = {
       }
     } catch (err) {
       console.warn('[SyncEngine] Reconcile warning:', err);
+    }
+  },
+
+  /**
+   * Phase 4: Download and cache image binary Blobs into IndexedDB (db.photos)
+   * for any photos that were synced from the cloud but don't have fileBlob stored locally yet.
+   */
+  cachePendingPhotosBlobs: async () => {
+    if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return;
+    try {
+      // Find active photos that have a downloadUrl but no local fileBlob
+      const unCachedPhotos = await db.photos
+        .filter((p) => !p.isDeleted && !p.fileBlob && Boolean(p.downloadUrl))
+        .toArray();
+
+      if (unCachedPhotos.length === 0) return;
+
+      console.log(`[SyncEngine] Caching ${unCachedPhotos.length} image blob(s) into IndexedDB...`);
+
+      const CONCURRENCY_LIMIT = 4;
+      let cachedCount = 0;
+
+      for (let i = 0; i < unCachedPhotos.length; i += CONCURRENCY_LIMIT) {
+        if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) break;
+        const chunk = unCachedPhotos.slice(i, i + CONCURRENCY_LIMIT);
+        await Promise.all(
+          chunk.map(async (photo) => {
+            if (!photo.downloadUrl) return;
+            const blob = await downloadImageBlob(photo.downloadUrl);
+            if (blob) {
+              await db.photos.update(photo.localPhotoId, { fileBlob: blob });
+              cachedCount++;
+            }
+          })
+        );
+      }
+
+      if (cachedCount > 0) {
+        console.log(`[SyncEngine] Successfully cached ${cachedCount} image blob(s) into IndexedDB.`);
+        notifyRepositoryChanged();
+      }
+    } catch (err) {
+      console.warn('[SyncEngine] Error during photo blob caching:', err);
     }
   },
 };
