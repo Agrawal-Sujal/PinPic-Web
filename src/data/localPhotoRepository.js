@@ -390,7 +390,9 @@ export const localPhotoRepository = {
             const isFriends = visibility === 'FRIENDS';
             const isPrivate = visibility === 'PRIVATE';
 
+            const globalClusterId = crypto.randomUUID();
             const clusterId = await db.clusters.add({
+              globalClusterId,
               location,
               photoCount: 1,
               visibility,
@@ -408,9 +410,12 @@ export const localPhotoRepository = {
               createdAt: now,
             });
 
+            const globalPhotoId = crypto.randomUUID();
             const photoId = await db.photos.add({
+              globalPhotoId,
               photoName,
               clusterId,
+              globalClusterId,
               userId: userId || 'unknown',
               takenAt,
               editedAt: now,
@@ -437,9 +442,12 @@ export const localPhotoRepository = {
         } else {
           // Photo does not have location: save directly without cluster
           await db.transaction('rw', [db.photos, db.syncOperations], async () => {
+            const globalPhotoId = crypto.randomUUID();
             const photoId = await db.photos.add({
+              globalPhotoId,
               photoName,
               clusterId: null,
+              globalClusterId: null,
               userId: userId || 'unknown',
               takenAt,
               editedAt: now,

@@ -247,7 +247,7 @@ export const syncEngine = {
   },
 
   /**
-   * Phase 1: Push pending local operations to backend /api/sync/batch
+   * Phase 1: Push pending local operations to backend /api/sync/push
    * Uses sequential batchSize = 50 (matching Android SyncWorker) so that
    * CLUSTER operations complete and populate globalClusterId before dependent PHOTOS sync.
    */
@@ -285,7 +285,8 @@ export const syncEngine = {
       }
 
       console.log(`[SyncEngine] Processing pending operation ${pendingBatch[0].operationId} (${pendingBatch[0].entityType} ${pendingBatch[0].operation})...`);
-      const itemsToSend = [];
+      const clustersToSend = [];
+      const photosToSend = [];
 
       for (const op of pendingBatch) {
         const localId = Number(op.entityId);
@@ -294,58 +295,45 @@ export const syncEngine = {
           if (op.operation === 'ADD' || op.operation === 'UPDATE') {
             const cluster = await db.clusters.get(localId);
             if (!cluster) {
-              // Cluster deleted locally before sync
               await db.syncOperations.update(op.operationId, { status: 'COMPLETED' });
               continue;
             }
 
-            // Resolve thumbnail global ID
             let thumbGlobalId = null;
             if (cluster.thumbnailId) {
               const thumbPhoto = await db.photos.get(cluster.thumbnailId);
               thumbGlobalId = thumbPhoto?.globalPhotoId || null;
             }
 
-            itemsToSend.push({
-              operationId: op.operationId,
-              entityType: 'CLUSTER',
-              operation: op.operation,
-              localEntityId: op.entityId,
-              cluster: {
-                globalClusterId: cluster.globalClusterId || null,
-                location: cluster.location
-                  ? {
-                      latitude: cluster.location.latitude,
-                      longitude: cluster.location.longitude,
-                      locationName: cluster.location.locationName,
-                    }
-                  : null,
-                thumbnailPhotoGlobalId: thumbGlobalId,
-                photoCount: cluster.photoCount || 0,
-                visibility: cluster.visibility || 'PRIVATE',
-                publicPhotoCount: cluster.publicPhotoCount || 0,
-                privatePhotoCount: cluster.privatePhotoCount || 0,
-                friendPhotoCount: cluster.friendPhotoCount || 0,
-              },
+            clustersToSend.push({
+              globalClusterId: cluster.globalClusterId || null,
+              location: cluster.location
+                ? {
+                    latitude: cluster.location.latitude,
+                    longitude: cluster.location.longitude,
+                    locationName: cluster.location.locationName,
+                  }
+                : null,
+              thumbnailPhotoGlobalId: thumbGlobalId,
+              photoCount: cluster.photoCount || 0,
+              visibility: cluster.visibility || 'PRIVATE',
+              publicPhotoCount: cluster.publicPhotoCount || 0,
+              privatePhotoCount: cluster.privatePhotoCount || 0,
+              friendPhotoCount: cluster.friendPhotoCount || 0,
+              isDeleted: false,
             });
           } else if (op.operation === 'DELETE') {
             const cluster = await db.clusters.get(localId);
             const globalClusterId = cluster?.globalClusterId;
             if (!globalClusterId) {
-              // Never synced to cloud, permanently purge from local DB
               if (cluster) await db.clusters.delete(localId);
               await db.syncOperations.update(op.operationId, { status: 'COMPLETED' });
               continue;
             }
 
-            itemsToSend.push({
-              operationId: op.operationId,
-              entityType: 'CLUSTER',
-              operation: 'DELETE',
-              localEntityId: op.entityId,
-              cluster: {
-                globalClusterId,
-              },
+            clustersToSend.push({
+              globalClusterId,
+              isDeleted: true,
             });
           }
         } else if (op.entityType === 'PHOTOS') {
@@ -356,11 +344,9 @@ export const syncEngine = {
               continue;
             }
 
-            // 1. Ensure file is uploaded to S3 if not uploaded yet
             let s3Key = photo.s3Key;
             let fileBlob = photo.fileBlob;
 
-            // Fallback: if fileBlob is missing, try retrieving from previewUrl if it's a blob URL
             if (!s3Key && !fileBlob && photo.previewUrl?.startsWith('blob:')) {
               try {
                 const blobRes = await fetch(photo.previewUrl);
@@ -385,66 +371,53 @@ export const syncEngine = {
                 console.log(`[SyncEngine] S3 upload successful for photo ${localId}, s3Key: ${s3Key}`);
               } catch (err) {
                 console.error(`[SyncEngine] S3 upload failed for photo ${localId}:`, err);
-                // Keep operation pending to retry later
                 break;
               }
             }
 
-            // 2. Resolve cluster global ID
             let globalClusterId = photo.globalClusterId || null;
             if (photo.clusterId) {
               const cluster = await db.clusters.get(photo.clusterId);
               globalClusterId = cluster?.globalClusterId || globalClusterId;
             }
 
-            itemsToSend.push({
-              operationId: op.operationId,
-              entityType: 'PHOTOS',
-              operation: op.operation,
-              localEntityId: op.entityId,
-              photo: {
-                globalPhotoId: photo.globalPhotoId || null,
-                globalClusterId,
-                name: photo.photoName,
-                s3Key,
-                takenAt: photo.takenAt,
-                editedAt: photo.editedAt,
-                location: photo.location
-                  ? {
-                      latitude: photo.location.latitude,
-                      longitude: photo.location.longitude,
-                      locationName: photo.location.locationName,
-                    }
-                  : null,
-                visibility: photo.visibility || 'PRIVATE',
-                size: fileBlob?.size || null,
-              },
+            photosToSend.push({
+              globalPhotoId: photo.globalPhotoId || null,
+              globalClusterId,
+              name: photo.photoName,
+              s3Key,
+              takenAt: photo.takenAt,
+              editedAt: photo.editedAt,
+              location: photo.location
+                ? {
+                    latitude: photo.location.latitude,
+                    longitude: photo.location.longitude,
+                    locationName: photo.location.locationName,
+                  }
+                : null,
+              visibility: photo.visibility || 'PRIVATE',
+              size: fileBlob?.size || null,
+              isDeleted: false,
             });
           } else if (op.operation === 'DELETE') {
             const photo = await db.photos.get(localId);
             const globalPhotoId = photo?.globalPhotoId;
             if (!globalPhotoId) {
-              // Never synced to cloud, permanently purge from local DB
               revokeBlobUrl(localId);
               if (photo) await db.photos.delete(localId);
               await db.syncOperations.update(op.operationId, { status: 'COMPLETED' });
               continue;
             }
 
-            itemsToSend.push({
-              operationId: op.operationId,
-              entityType: 'PHOTOS',
-              operation: 'DELETE',
-              localEntityId: op.entityId,
-              photo: {
-                globalPhotoId,
-              },
+            photosToSend.push({
+              globalPhotoId,
+              isDeleted: true,
             });
           }
         }
       }
 
-      if (itemsToSend.length === 0) {
+      if (clustersToSend.length === 0 && photosToSend.length === 0) {
         const currentOp = await db.syncOperations.get(pendingBatch[0].operationId);
         if (currentOp?.status === 'COMPLETED') {
           continue;
@@ -452,57 +425,33 @@ export const syncEngine = {
         break;
       }
 
-      // Dispatch batch to backend
-      console.log(`[SyncEngine] Dispatching batch of ${itemsToSend.length} items to /api/sync/batch...`);
-      const syncResponse = await syncApi.syncBatch({
+      console.log(`[SyncEngine] Dispatching push mutations to /api/sync/push (${clustersToSend.length} clusters, ${photosToSend.length} photos)...`);
+      await syncApi.pushMutations({
         deviceId,
-        operations: itemsToSend,
+        clusters: clustersToSend,
+        photos: photosToSend,
       });
 
-      const results = syncResponse?.results || [];
-      console.log(`[SyncEngine] Received sync results:`, results);
+      for (const op of pendingBatch) {
+        const localEntityId = Number(op.entityId);
+        const isDelete = op.operation === 'DELETE';
 
-      for (const res of results) {
-        const localEntityId = Number(res.localEntityId);
-        if (res.status === 'SUCCESS') {
-          const entityType = res.entityType?.toUpperCase();
-          const matchedOp = pendingBatch.find((o) => o.operationId === res.operationId);
-          const isDelete = matchedOp?.operation === 'DELETE';
-
-          if (entityType === 'CLUSTER') {
-            if (isDelete) {
-              // Now that cloud deletion is confirmed, permanently remove from local DB
-              await db.clusters.delete(localEntityId);
-            } else if (res.globalId) {
-              await db.clusters.update(localEntityId, { globalClusterId: res.globalId });
-              await db.photos
-                .where('clusterId')
-                .equals(localEntityId)
-                .modify({ globalClusterId: res.globalId });
-            }
-          } else if (entityType === 'PHOTOS') {
-            if (isDelete) {
-              // Now that cloud deletion is confirmed, permanently remove from local DB
-              revokeBlobUrl(localEntityId);
-              await db.photos.delete(localEntityId);
-            } else if (res.globalId) {
-              await db.photos.update(localEntityId, { globalPhotoId: res.globalId });
-            }
-          }
-          await db.syncOperations.update(res.operationId, { status: 'COMPLETED' });
-        } else {
-          console.warn(`[SyncEngine] Server reported failure for op ${res.operationId}:`, res.errorMessage);
-          await db.syncOperations.update(res.operationId, { status: 'FAILED' });
+        if (op.entityType === 'CLUSTER' && isDelete) {
+          await db.clusters.delete(localEntityId);
+        } else if (op.entityType === 'PHOTOS' && isDelete) {
+          revokeBlobUrl(localEntityId);
+          await db.photos.delete(localEntityId);
         }
+        await db.syncOperations.update(op.operationId, { status: 'COMPLETED' });
       }
     }
   },
 
   /**
-   * Phase 2: Pull cloud changes via /api/sync/pull
+   * Phase 2: Pull cloud deltas via /api/sync/deltas with Echo Suppression (Strategy 2)
    */
   pullCloudChanges: async (deviceId, userId) => {
-    const pullBatchSize = 50;
+    const pullBatchSize = 100;
     let anyChangesApplied = false;
 
     while (true) {
@@ -511,195 +460,182 @@ export const syncEngine = {
         break;
       }
 
-      let currentLastOpId = Number(await getSyncMetadata('lastSyncedOperationId', 0));
-      console.log(`[SyncEngine] Pulling cloud changes since opId: ${currentLastOpId}...`);
+      let currentCursor = Number(await getSyncMetadata('sync_revision_cursor', 0));
+      console.log(`[SyncEngine] Pulling cloud deltas since revision cursor: ${currentCursor}...`);
 
-      const pullResponse = await syncApi.pullOperations({
-        lastOperationId: currentLastOpId,
-        batchSize: pullBatchSize,
-        deviceId,
-      });
-
-      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
-        console.log('[SyncEngine] Pull cancelled before applying operations.');
+      let pullResponse;
+      try {
+        pullResponse = await syncApi.pullDeltas({
+          cursor: currentCursor,
+          limit: pullBatchSize,
+          deviceId,
+        });
+      } catch (err) {
+        console.error('[SyncEngine] Delta pull request failed:', err);
         break;
       }
 
-      const operations = pullResponse?.operations || [];
-      if (operations.length === 0) {
-        console.log('[SyncEngine] No new cloud changes to pull.');
+      if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) break;
+
+      if (pullResponse?.resetRequired) {
+        console.warn('[SyncEngine] Reset required by server. Clearing local database cache...');
+        await clearLocalDatabase();
         break;
       }
 
-      console.log(`[SyncEngine] Applying ${operations.length} pulled operations locally...`);
-      let latestOpId = currentLastOpId;
+      const clusters = pullResponse?.clusters || [];
+      const photos = pullResponse?.photos || [];
 
-      for (const op of operations) {
-        if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) {
-          console.log('[SyncEngine] Aborting pulled operations loop due to cancellation.');
-          break;
-        }
-        try {
-          const entityType = op.entityType?.toUpperCase();
-          const operation = op.operation?.toUpperCase();
+      if (clusters.length === 0 && photos.length === 0) {
+        console.log('[SyncEngine] No new cloud deltas to pull.');
+        break;
+      }
 
-          if (entityType === 'PHOTOS') {
-            const globalPhotoId = op.entityId;
-            const globalClusterId = op.photo?.globalClusterId || null;
+      console.log(`[SyncEngine] Received ${clusters.length} cluster deltas, ${photos.length} photo deltas.`);
 
-            // Resolve cluster local ID if globalClusterId is given
-            let clusterLocalId = null;
-            if (globalClusterId) {
-              let localCluster = await db.clusters.where('globalClusterId').equals(globalClusterId).first();
-              if (!localCluster) {
-                clusterLocalId = await db.clusters.add({
-                  globalClusterId,
-                  location: op.photo?.location || null,
-                  photoCount: 1,
-                  visibility: op.photo?.visibility || 'PRIVATE',
-                });
-              } else {
-                clusterLocalId = localCluster.localClusterId;
-              }
-            }
+      // Pre-download image blobs for non-echo, non-deleted photos
+      const externalPhotosWithUrls = photos.filter(
+        (p) => !p.isEcho && !p.isDeleted && p.downloadUrl
+      );
+      const downloadedBlobs = new Map();
+      await Promise.all(
+        externalPhotosWithUrls.map(async (p) => {
+          const blob = await downloadImageBlob(p.downloadUrl);
+          if (blob) downloadedBlobs.set(p.photoId, blob);
+        })
+      );
 
-            if (operation === 'ADD' || operation === 'UPDATE') {
-              const existing = await db.photos.where('globalPhotoId').equals(globalPhotoId).first();
+      // ATOMIC TRANSACTION: Commit all deltas & cursor in IndexedDB
+      await db.transaction('rw', [db.photos, db.clusters, db.syncMetadata], async () => {
+        // 1. Process Clusters
+        for (const c of clusters) {
+          const existing = await db.clusters.where('globalClusterId').equals(c.clusterId).first();
 
-              if (existing) {
-                const updates = {};
-                if (clusterLocalId !== null && existing.clusterId !== clusterLocalId) {
-                  updates.clusterId = clusterLocalId;
-                }
-                if (globalClusterId && existing.globalClusterId !== globalClusterId) {
-                  updates.globalClusterId = globalClusterId;
-                }
-                if (op.photo?.name && existing.photoName !== op.photo.name) {
-                  updates.photoName = op.photo.name;
-                }
-                if (op.photo?.location && !existing.location) {
-                  updates.location = op.photo.location;
-                }
-                if (op.photo?.visibility && existing.visibility !== op.photo.visibility) {
-                  updates.visibility = op.photo.visibility;
-                }
-                if (op.photo?.s3Key && existing.s3Key !== op.photo.s3Key) {
-                  updates.s3Key = op.photo.s3Key;
-                }
-                if (op.downloadUrl && existing.downloadUrl !== op.downloadUrl) {
-                  updates.downloadUrl = op.downloadUrl;
-                  const newBlob = await downloadImageBlob(op.downloadUrl);
-                  if (newBlob) {
-                    updates.fileBlob = newBlob;
-                    revokeBlobUrl(existing.localPhotoId);
-                    revokeBlobUrl(existing.globalPhotoId);
-                  }
-                } else if (!existing.fileBlob && op.downloadUrl) {
-                  const newBlob = await downloadImageBlob(op.downloadUrl);
-                  if (newBlob) {
-                    updates.fileBlob = newBlob;
-                  }
-                }
-                if (op.photo?.editedAt && existing.editedAt !== op.photo.editedAt) {
-                  updates.editedAt = op.photo.editedAt;
-                }
-                if (Object.keys(updates).length > 0) {
-                  await db.photos.update(existing.localPhotoId, updates);
-                  anyChangesApplied = true;
-                }
-              } else {
-                let fileBlob = null;
-                if (op.downloadUrl) {
-                  fileBlob = await downloadImageBlob(op.downloadUrl);
-                }
-                await db.photos.add({
-                  globalPhotoId,
-                  clusterId: clusterLocalId,
-                  globalClusterId,
-                  userId: userId || 'unknown',
-                  photoName: op.photo?.name || 'Photo',
-                  s3Key: op.photo?.s3Key || null,
-                  takenAt: op.photo?.takenAt || new Date().toISOString(),
-                  editedAt: op.photo?.editedAt || new Date().toISOString(),
-                  location: op.photo?.location || null,
-                  visibility: op.photo?.visibility || 'PRIVATE',
-                  downloadUrl: op.downloadUrl || null,
-                  fileBlob: fileBlob || null,
-                });
-                anyChangesApplied = true;
-              }
-            } else if (operation === 'DELETE') {
-              const photo = await db.photos.where('globalPhotoId').equals(globalPhotoId).first();
-              if (photo) {
-                revokeBlobUrl(photo.localPhotoId);
-                revokeBlobUrl(photo.globalPhotoId);
-                if (photo._createdBlobUrl) {
-                  try {
-                    URL.revokeObjectURL(photo._createdBlobUrl);
-                  } catch (_) {}
-                }
-                await db.photos.delete(photo.localPhotoId);
-                anyChangesApplied = true;
-              }
-            }
-          } else if (entityType === 'CLUSTER') {
-            const globalClusterId = op.entityId;
-
-            if (operation === 'ADD' || operation === 'UPDATE') {
-              const existing = await db.clusters.where('globalClusterId').equals(globalClusterId).first();
-
-              const clusterData = {
-                globalClusterId,
-                location: op.cluster?.location,
-                photoCount: op.cluster?.photoCount || 0,
-                visibility: op.cluster?.visibility || 'PRIVATE',
-                publicPhotoCount: op.cluster?.publicPhotoCount || 0,
-                privatePhotoCount: op.cluster?.privatePhotoCount || 0,
-                friendPhotoCount: op.cluster?.friendPhotoCount || 0,
-              };
-
-              let localClusterId;
-              if (existing) {
-                await db.clusters.update(existing.localClusterId, clusterData);
-                localClusterId = existing.localClusterId;
-              } else {
-                localClusterId = await db.clusters.add(clusterData);
-              }
+          if (c.isDeleted) {
+            if (existing) {
+              await db.clusters.delete(existing.localClusterId);
+              await db.photos
+                .where('clusterId')
+                .equals(existing.localClusterId)
+                .modify({ clusterId: null, globalClusterId: null });
               anyChangesApplied = true;
+            }
+          } else if (c.isEcho) {
+            // ECHO: This device pushed this cluster. Only advance its revision!
+            if (existing) {
+              await db.clusters.update(existing.localClusterId, { revision: c.revision });
+            }
+          } else {
+            // EXTERNAL CHANGE
+            const clusterData = {
+              globalClusterId: c.clusterId,
+              location: c.location,
+              photoCount: c.photoCount || 0,
+              visibility: c.visibility || 'PRIVATE',
+              publicPhotoCount: c.publicPhotoCount || 0,
+              privatePhotoCount: c.privatePhotoCount || 0,
+              friendPhotoCount: c.friendPhotoCount || 0,
+              revision: c.revision,
+            };
 
-              // Link any existing photos in db.photos that have this globalClusterId but unlinked or mismatched clusterId
-              const unlinkedPhotos = await db.photos
-                .where('globalClusterId')
-                .equals(globalClusterId)
-                .toArray();
+            let localClusterId;
+            if (existing) {
+              await db.clusters.update(existing.localClusterId, clusterData);
+              localClusterId = existing.localClusterId;
+            } else {
+              localClusterId = await db.clusters.add(clusterData);
+            }
+            anyChangesApplied = true;
 
-              for (const p of unlinkedPhotos) {
-                if (p.clusterId !== localClusterId) {
-                  await db.photos.update(p.localPhotoId, { clusterId: localClusterId });
-                  anyChangesApplied = true;
-                }
+            // Link any local photos that match this globalClusterId
+            await db.photos
+              .where('globalClusterId')
+              .equals(c.clusterId)
+              .modify({ clusterId: localClusterId });
+          }
+        }
+
+        // 2. Process Photos
+        for (const p of photos) {
+          const existing = await db.photos.where('globalPhotoId').equals(p.photoId).first();
+
+          if (p.isDeleted) {
+            if (existing) {
+              revokeBlobUrl(existing.localPhotoId);
+              revokeBlobUrl(existing.globalPhotoId);
+              if (existing._createdBlobUrl) {
+                try {
+                  URL.revokeObjectURL(existing._createdBlobUrl);
+                } catch (_) {}
               }
-            } else if (operation === 'DELETE') {
-              const cluster = await db.clusters.where('globalClusterId').equals(globalClusterId).first();
-              if (cluster) {
-                await db.clusters.delete(cluster.localClusterId);
-                await db.photos
-                  .where('clusterId')
-                  .equals(cluster.localClusterId)
-                  .modify({ clusterId: null, globalClusterId: null });
-                anyChangesApplied = true;
+              await db.photos.delete(existing.localPhotoId);
+              anyChangesApplied = true;
+            }
+          } else if (p.isEcho) {
+            // ECHO: This device pushed this photo.
+            // Do NOT overwrite local previewUrl or fileBlob! Only update revision:
+            if (existing) {
+              await db.photos.update(existing.localPhotoId, { revision: p.revision });
+            }
+          } else {
+            // EXTERNAL CHANGE
+            let clusterLocalId = null;
+            if (p.clusterId) {
+              const cluster = await db.clusters.where('globalClusterId').equals(p.clusterId).first();
+              clusterLocalId = cluster ? cluster.localClusterId : null;
+            }
+
+            const blob = downloadedBlobs.get(p.photoId);
+
+            if (existing) {
+              const updates = {
+                revision: p.revision,
+              };
+              if (p.name && existing.photoName !== p.name) updates.photoName = p.name;
+              if (p.clusterId && existing.globalClusterId !== p.clusterId) {
+                updates.globalClusterId = p.clusterId;
+                updates.clusterId = clusterLocalId;
               }
+              if (p.location) updates.location = p.location;
+              if (p.visibility && existing.visibility !== p.visibility) updates.visibility = p.visibility;
+              if (p.s3Key && existing.s3Key !== p.s3Key) updates.s3Key = p.s3Key;
+              if (p.downloadUrl && existing.downloadUrl !== p.downloadUrl) updates.downloadUrl = p.downloadUrl;
+              if (blob) {
+                updates.fileBlob = blob;
+                revokeBlobUrl(existing.localPhotoId);
+                revokeBlobUrl(existing.globalPhotoId);
+              }
+              if (p.editedAt) updates.editedAt = p.editedAt;
+
+              await db.photos.update(existing.localPhotoId, updates);
+              anyChangesApplied = true;
+            } else {
+              await db.photos.add({
+                globalPhotoId: p.photoId,
+                clusterId: clusterLocalId,
+                globalClusterId: p.clusterId || null,
+                userId: userId || 'unknown',
+                photoName: p.name || 'Photo',
+                s3Key: p.s3Key || null,
+                takenAt: p.takenAt || new Date().toISOString(),
+                editedAt: p.editedAt || new Date().toISOString(),
+                location: p.location || null,
+                visibility: p.visibility || 'PRIVATE',
+                downloadUrl: p.downloadUrl || null,
+                fileBlob: blob || null,
+                revision: p.revision,
+              });
+              anyChangesApplied = true;
             }
           }
-
-          latestOpId = Math.max(latestOpId, Number(op.operationId));
-          await setSyncMetadata('lastSyncedOperationId', latestOpId);
-        } catch (opErr) {
-          console.error(`[SyncEngine] Error applying pulled operation ${op.operationId}:`, opErr);
         }
-      }
 
-      if (!pullResponse.hasMore && operations.length < pullBatchSize) {
+        // 3. Atomically update revision cursor in the SAME transaction
+        const nextCursor = Number(pullResponse?.nextCursor || currentCursor);
+        await setSyncMetadata('sync_revision_cursor', nextCursor);
+      });
+
+      if (!pullResponse?.hasMore) {
         break;
       }
     }
