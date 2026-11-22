@@ -46,5 +46,12 @@ export const photoApi = {
     const response = await api.get(`/photos/user/${userId}/clusters`);
     return response.data;
   },
+
+  getPresignedUrl: async (s3Key) => {
+    const response = await api.get('/s3/presigned-url', {
+      params: { objectKey: s3Key },
+    });
+    return response.data;
+  },
 };
 
