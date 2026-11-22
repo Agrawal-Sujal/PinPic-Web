@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Navigation, RefreshCw, X, Cloud } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Polyline } from 'react-leaflet';
+import { Plus, Navigation, RefreshCw, X, Cloud, Plane, Play } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { localPhotoRepository } from '../../data/localPhotoRepository';
+import { localCollectionRepository } from '../../data/localCollectionRepository';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { useClusterRadius } from '../../hooks/useClusterRadius';
 import PinPicMapContainer from '../../components/map/PinPicMapContainer';
-import PinPicClusterMarker from '../../components/map/PinPicClusterMarker';
+import PinPicClusterMarker, { TripStopMarker } from '../../components/map/PinPicClusterMarker';
 import DroppedPinMarker from '../../components/map/DroppedPinMarker';
 import ClusterRadiusControl from '../../components/map/ClusterRadiusControl';
 import SelectedPhotoCard from '../../components/map/SelectedPhotoCard';
@@ -14,6 +17,7 @@ import SelectedClusterSheet from '../../components/map/SelectedClusterSheet';
 import AddPhotoBottomSheet from '../../components/map/AddPhotoBottomSheet';
 import DatePickerModal from '../../components/map/DatePickerModal';
 import TimePickerModal from '../../components/map/TimePickerModal';
+import TripReplayOverlay from '../../components/map/TripReplayOverlay';
 import FullScreenImageViewer from '../../components/common/FullScreenImageViewer';
 import LogoHeader from '../../components/common/LogoHeader';
 import MapClusteringSystem, { createOverviewBoundsFit } from '../../domain/map/MapClusteringSystem';
@@ -37,6 +41,19 @@ export const MapPage = () => {
   // Selection state
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedClusterDetail, setSelectedClusterDetail] = useState(null);
+
+  // URL Search Params (Collection Filter & Replay)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const collectionId = searchParams.get('collectionId');
+  const shouldAutoReplay = searchParams.get('replay') === 'true';
+
+  // Collection / Trip state
+  const [activeTrip, setActiveTrip] = useState(null);
+  const [selectedTripPhoto, setSelectedTripPhoto] = useState(null);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [replayIndex, setReplayIndex] = useState(0);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(1);
 
   // Add Photo 3-Step Flow state matching Android AddPhotoMode
   const [addPhotoMode, setAddPhotoMode] = useState('NONE'); // 'NONE' | 'SELECT_LOCATION' | 'LOCATION_SELECTED' | 'PHOTOS_SELECTED'
@@ -118,6 +135,72 @@ export const MapPage = () => {
     });
     return unsubscribe;
   }, [fetchAndIndexClusters]);
+
+  // Load active trip when collectionId changes
+  useEffect(() => {
+    if (!collectionId) {
+      setActiveTrip(null);
+      setSelectedTripPhoto(null);
+      setIsReplaying(false);
+      return;
+    }
+
+    let isMounted = true;
+    localCollectionRepository.getCollectionById(collectionId).then((trip) => {
+      if (!isMounted) return;
+      setActiveTrip(trip);
+
+      if (trip?.photos) {
+        const geotagged = trip.photos.filter(
+          (p) => p.location?.latitude != null && p.location?.longitude != null
+        );
+        if (geotagged.length > 0) {
+          const points = geotagged.map((p) => [p.location.latitude, p.location.longitude]);
+          setBoundsFit({
+            points,
+            key: `trip_${trip.id}_${Date.now()}`,
+            animate: true,
+            maxZoom: 15,
+          });
+
+          if (shouldAutoReplay) {
+            setIsReplaying(true);
+            setReplayIndex(0);
+            setIsReplayPlaying(true);
+          }
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [collectionId, shouldAutoReplay]);
+
+  // Geotagged photos belonging to active trip
+  const tripPhotosWithCoords = useMemo(() => {
+    if (!activeTrip?.photos) return [];
+    return activeTrip.photos.filter(
+      (p) => p.location?.latitude != null && p.location?.longitude != null
+    );
+  }, [activeTrip]);
+
+  const tripPathCoordinates = useMemo(() => {
+    return tripPhotosWithCoords.map((p) => [p.location.latitude, p.location.longitude]);
+  }, [tripPhotosWithCoords]);
+
+  // Camera tracking during Replay Trip animation
+  useEffect(() => {
+    if (!isReplaying || tripPhotosWithCoords.length === 0) return;
+    const targetPhoto = tripPhotosWithCoords[replayIndex];
+    if (targetPhoto?.location?.latitude != null && targetPhoto?.location?.longitude != null) {
+      setMapCenter({
+        lat: targetPhoto.location.latitude,
+        lng: targetPhoto.location.longitude,
+      });
+      setMapZoom(15);
+    }
+  }, [isReplaying, replayIndex, tripPhotosWithCoords]);
 
   // Fast O(log N) camera-idle query over KD-Tree
   const handleCameraChange = useCallback(({ bbox, zoom, center }) => {
@@ -356,7 +439,16 @@ export const MapPage = () => {
     }
   };
 
-  const selectedPhotoForCard = selectedNode && !selectedNode.isCluster && selectedNode.count === 1
+  const selectedPhotoForCard = selectedTripPhoto
+    ? {
+        photoId: selectedTripPhoto.photoId,
+        name: selectedTripPhoto.name,
+        downloadUrl: selectedTripPhoto.photoUrl || selectedTripPhoto.downloadUrl,
+        location: selectedTripPhoto.location,
+        takenAt: selectedTripPhoto.takenAt,
+        visibility: selectedTripPhoto.visibility || 'PUBLIC',
+      }
+    : selectedNode && !selectedNode.isCluster && selectedNode.count === 1
     ? {
         photoId: selectedNode.pointId || String(selectedNode.id),
         name: selectedNode.originalCluster?.photos?.[0]?.name || 'Pinned Memory',
@@ -399,32 +491,84 @@ export const MapPage = () => {
         )}
       </div>
 
-      {/* Floating Action Controls on Map (Top Right) */}
-      <div className="absolute top-4 right-4 z-30 flex flex-col gap-2 pointer-events-auto">
-        <button
-          onClick={handleLocateMe}
-          title="Current Location"
-          className="p-3 rounded-full bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-lg hover:bg-black/5 dark:hover:bg-white/5 text-pinpic-coral transition-transform active:scale-95"
-        >
-          <Navigation className="w-5 h-5 stroke-[2.2]" />
-        </button>
+      {/* Active Trip Banner */}
+      {activeTrip && (
+        <div className="absolute top-4 right-4 sm:right-6 sm:max-w-md z-30 bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark rounded-full p-2 pl-4 pr-3 shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-top-4">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-8 h-8 rounded-full bg-pinpic-coral/15 text-pinpic-coral dark:text-pinpic-coral-dark flex items-center justify-center flex-shrink-0">
+              <Plane className="w-4 h-4" />
+            </span>
+            <div className="min-w-0">
+              <h3 className="font-extrabold text-xs sm:text-sm text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark truncate">
+                {activeTrip.title}
+              </h3>
+              <p className="text-[11px] text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark truncate">
+                {tripPhotosWithCoords.length} stops on map • Other pins faded
+              </p>
+            </div>
+          </div>
 
-        <button
-          onClick={() => {
-            fetchAndIndexClusters();
-            triggerSync(user?.userId);
-          }}
-          title={isSyncing ? 'Syncing with cloud...' : 'Refresh & Sync'}
-          className="p-3 rounded-full bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-lg hover:bg-black/5 dark:hover:bg-white/5 text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark transition-transform active:scale-95"
-        >
-          <RefreshCw
-            className={`w-5 h-5 stroke-[2] ${loading || isSyncing ? 'animate-spin text-pinpic-coral' : ''}`}
-          />
-        </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!isReplaying && tripPhotosWithCoords.length > 0 && (
+              <button
+                onClick={() => {
+                  setIsReplaying(true);
+                  setReplayIndex(0);
+                  setIsReplayPlaying(true);
+                }}
+                className="px-3 py-1.5 rounded-full bg-pinpic-coral dark:bg-pinpic-coral-dark text-white font-bold text-xs flex items-center gap-1.5 shadow-sm hover:opacity-90 active:scale-95 transition-all"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span className="hidden sm:inline">Replay</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                setSearchParams({});
+                setActiveTrip(null);
+                setIsReplaying(false);
+                setSelectedTripPhoto(null);
+              }}
+              className="p-1.5 rounded-full text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+              aria-label="Exit Trip View"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Action Controls on Map (Top Right) */}
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-auto">
+        {!activeTrip && (
+          <button
+            onClick={handleLocateMe}
+            title="Current Location"
+            className="p-3 rounded-full bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-lg hover:bg-black/5 dark:hover:bg-white/5 text-pinpic-coral transition-transform active:scale-95"
+          >
+            <Navigation className="w-5 h-5 stroke-[2.2]" />
+          </button>
+        )}
+
+        {!activeTrip && (
+          <button
+            onClick={() => {
+              fetchAndIndexClusters();
+              triggerSync(user?.userId);
+            }}
+            title={isSyncing ? 'Syncing with cloud...' : 'Refresh & Sync'}
+            className="p-3 rounded-full bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark border border-pinpic-border-light dark:border-pinpic-outline-dark shadow-lg hover:bg-black/5 dark:hover:bg-white/5 text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark transition-transform active:scale-95"
+          >
+            <RefreshCw
+              className={`w-5 h-5 stroke-[2] ${loading || isSyncing ? 'animate-spin text-pinpic-coral' : ''}`}
+            />
+          </button>
+        )}
       </div>
 
-      {/* Add Photo Floating Action Button (FAB) at Bottom Right - only when addPhotoMode is NONE */}
-      {addPhotoMode === 'NONE' && (
+      {/* Add Photo Floating Action Button (FAB) at Bottom Right - only when addPhotoMode is NONE and not activeTrip */}
+      {addPhotoMode === 'NONE' && !activeTrip && (
         <div className="absolute bottom-24 right-5 sm:bottom-8 sm:right-8 z-30 pointer-events-auto animate-in fade-in zoom-in-90">
           <button
             onClick={() => {
@@ -449,14 +593,48 @@ export const MapPage = () => {
         onCameraChange={handleCameraChange}
         onMapClick={handleMapClick}
       >
+        {/* Normal clusters (Faded out when in activeTrip filter mode) */}
         {visibleNodes.map((node) => (
           <PinPicClusterMarker
             key={`cluster-${clusterRadius}-${node.id}`}
             node={node}
             isSelected={selectedNode?.id === node.id}
+            isDimmed={Boolean(activeTrip)}
             onClick={handleNodeClick}
           />
         ))}
+
+        {/* Trip Path Polyline Connecting Stops in Chronological Order */}
+        {activeTrip && tripPathCoordinates.length > 1 && (
+          <Polyline
+            positions={tripPathCoordinates}
+            pathOptions={{
+              color: '#f56a41',
+              weight: 4,
+              opacity: 0.9,
+              dashArray: '8, 8',
+              lineCap: 'round',
+              lineJoin: 'round',
+            }}
+          />
+        )}
+
+        {/* Trip Stop Markers with Chronological Badges */}
+        {activeTrip &&
+          tripPhotosWithCoords.map((photo, idx) => (
+            <TripStopMarker
+              key={`trip-stop-${photo.photoId || idx}`}
+              photo={photo}
+              index={idx}
+              isCurrentReplay={isReplaying && replayIndex === idx}
+              isSelected={selectedTripPhoto?.photoId === photo.photoId}
+              onClick={(clicked) => {
+                setSelectedTripPhoto(clicked);
+                setSelectedNode(null);
+                setSelectedClusterDetail(null);
+              }}
+            />
+          ))}
 
         {selectedAddPhotoLocation && (
           <DroppedPinMarker
@@ -465,6 +643,27 @@ export const MapPage = () => {
           />
         )}
       </PinPicMapContainer>
+
+      {/* Trip Replay Controls Overlay */}
+      {isReplaying && (
+        <TripReplayOverlay
+          photos={tripPhotosWithCoords}
+          currentIndex={replayIndex}
+          isPlaying={isReplayPlaying}
+          playbackSpeed={replaySpeed}
+          onPlayPause={(playing) => setIsReplayPlaying(playing)}
+          onPrevious={() => setReplayIndex((prev) => Math.max(0, prev - 1))}
+          onNext={() =>
+            setReplayIndex((prev) => Math.min(tripPhotosWithCoords.length - 1, prev + 1))
+          }
+          onSpeedChange={(speed) => setReplaySpeed(speed)}
+          onClose={() => setIsReplaying(false)}
+          onSelectPhoto={(photo) => {
+            setFullScreenPhotos([photo]);
+            setFullScreenIndex(0);
+          }}
+        />
+      )}
 
       {/* Add Photo 3-Step Bottom Sheet */}
       <AddPhotoBottomSheet
@@ -502,10 +701,13 @@ export const MapPage = () => {
       />
 
       {/* Selected Single Photo Card */}
-      {addPhotoMode === 'NONE' && selectedPhotoForCard && (
+      {addPhotoMode === 'NONE' && !isReplaying && selectedPhotoForCard && (
         <SelectedPhotoCard
           photo={selectedPhotoForCard}
-          onClose={() => setSelectedNode(null)}
+          onClose={() => {
+            setSelectedNode(null);
+            setSelectedTripPhoto(null);
+          }}
           onViewFull={() => {
             setFullScreenPhotos([selectedPhotoForCard]);
             setFullScreenIndex(0);
@@ -514,7 +716,7 @@ export const MapPage = () => {
       )}
 
       {/* Selected Aggregate Cluster Bottom Sheet */}
-      {addPhotoMode === 'NONE' && (
+      {addPhotoMode === 'NONE' && !activeTrip && (
         <SelectedClusterSheet
           cluster={selectedClusterDetail}
           onClose={() => setSelectedClusterDetail(null)}
