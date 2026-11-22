@@ -11,6 +11,8 @@ import UsernameSetup from './pages/auth/UsernameSetup';
 import MapPage from './pages/map/MapPage';
 import OtherUserMapPage from './pages/map/OtherUserMapPage';
 import GalleryPage from './pages/gallery/GalleryPage';
+import EventsPage from './pages/events/EventsPage';
+import StoryPage from './pages/events/StoryPage';
 import SearchPage from './pages/search/SearchPage';
 import ChatPage from './pages/chat/ChatPage';
 import ProfilePage from './pages/profile/ProfilePage';
@@ -108,6 +110,24 @@ export function App() {
             <ShellLayout>
               <GalleryPage />
             </ShellLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/events"
+        element={
+          <ProtectedRoute>
+            <ShellLayout>
+              <EventsPage />
+            </ShellLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/events/:id"
+        element={
+          <ProtectedRoute>
+            <StoryPage />
           </ProtectedRoute>
         }
       />

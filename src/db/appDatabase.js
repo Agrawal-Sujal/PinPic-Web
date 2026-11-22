@@ -32,6 +32,15 @@ db.version(5).stores({
   settings: 'key',
 });
 
+db.version(6).stores({
+  photos: '++localPhotoId, globalPhotoId, clusterId, globalClusterId, userId, visibility, takenAt, revision, isDeleted',
+  clusters: '++localClusterId, globalClusterId, visibility, revision, isDeleted',
+  syncOperations: 'operationId, entityType, entityId, operation, status, createdAt',
+  syncMetadata: 'key',
+  settings: 'key',
+  collections: 'id, type, title, *photoIds, createdAt, updatedAt, isDeleted',
+});
+
 export const CLUSTER_RADIUS_SETTING_KEY = 'clusterRadius';
 
 /**

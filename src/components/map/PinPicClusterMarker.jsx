@@ -8,11 +8,16 @@ import L from 'leaflet';
  * Renders:
  * - When count > 1 (Aggregate Cluster): Teal outline with photo count badge.
  * - When count == 1 (Leaf Cluster): Coral pointer pin with photo thumbnail.
+ * - When isDimmed == true: Fades out marker (25% opacity, grayscale) for active Collection filter mode.
  */
-function createClusterDivIcon(node, isSelected = false) {
+function createClusterDivIcon(node, isSelected = false, isDimmed = false) {
   const count = node.count || 1;
   const isCluster = count > 1;
   const thumbUrl = node.thumbnailUrl;
+
+  const dimStyles = isDimmed
+    ? 'opacity: 0.22; filter: grayscale(80%); pointer-events: auto; transition: opacity 0.3s;'
+    : 'transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);';
 
   if (isCluster) {
     const badgeText = count > 99 ? '99+' : count;
@@ -32,7 +37,7 @@ function createClusterDivIcon(node, isSelected = false) {
           ${bgImage}
           box-shadow: 0 4px 14px rgba(0,0,0,0.25);
           cursor: pointer;
-          transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+          ${dimStyles}
         ">
           <div style="
             position: absolute;
@@ -77,7 +82,7 @@ function createClusterDivIcon(node, isSelected = false) {
         ${bgImage}
         box-shadow: 0 4px 14px rgba(0,0,0,0.25);
         cursor: pointer;
-        transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        ${dimStyles}
       ">
         <div style="
           position: absolute;
@@ -97,8 +102,8 @@ function createClusterDivIcon(node, isSelected = false) {
   });
 }
 
-export const PinPicClusterMarker = ({ node, isSelected = false, onClick }) => {
-  const icon = useMemo(() => createClusterDivIcon(node, isSelected), [node, isSelected]);
+export const PinPicClusterMarker = ({ node, isSelected = false, isDimmed = false, onClick }) => {
+  const icon = useMemo(() => createClusterDivIcon(node, isSelected, isDimmed), [node, isSelected, isDimmed]);
 
   if (!node || node.lat == null || node.lon == null) return null;
 
@@ -116,5 +121,100 @@ export const PinPicClusterMarker = ({ node, isSelected = false, onClick }) => {
   );
 };
 
-export default PinPicClusterMarker;
+/**
+ * Creates custom pin icon specifically for trip replay & trip path stops
+ */
+export function createTripStopDivIcon(photo, index, isCurrentReplay = false, isSelected = false) {
+  const thumbUrl = photo.photoUrl || photo.downloadUrl;
+  const badgeText = `#${index + 1}`;
+  const borderColor = isCurrentReplay ? '#f56a41' : (isSelected ? '#1D9E75' : '#f56a41');
+  const bgImage = thumbUrl
+    ? `background-image: url('${thumbUrl}'); background-size: cover; background-position: center;`
+    : `background-color: #f56a41;`;
 
+  const pulseHtml = isCurrentReplay
+    ? `<div style="
+        position: absolute;
+        inset: -6px;
+        border-radius: 9999px;
+        border: 3px solid #f56a41;
+        animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+      "></div>`
+    : '';
+
+  return L.divIcon({
+    className: 'pinpic-trip-marker-wrapper',
+    html: `
+      <div class="custom-trip-marker" style="
+        position: relative;
+        width: 48px;
+        height: 48px;
+        border-radius: 9999px;
+        border: 3.5px solid ${borderColor};
+        ${bgImage}
+        box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+        cursor: pointer;
+        transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        transform: ${isCurrentReplay ? 'scale(1.2)' : 'scale(1)'};
+      ">
+        ${pulseHtml}
+        <div style="
+          position: absolute;
+          top: -8px;
+          left: -8px;
+          background-color: #1D9E75;
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 900;
+          min-width: 22px;
+          height: 22px;
+          padding: 0 4px;
+          border-radius: 9999px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        ">${badgeText}</div>
+        <div style="
+          position: absolute;
+          bottom: -8px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 0;
+          height: 0;
+          border-left: 6px solid transparent;
+          border-right: 6px solid transparent;
+          border-top: 8px solid ${borderColor};
+        "></div>
+      </div>
+    `,
+    iconSize: [48, 48],
+    iconAnchor: [24, 52],
+  });
+}
+
+export const TripStopMarker = ({ photo, index, isCurrentReplay = false, isSelected = false, onClick }) => {
+  const icon = useMemo(
+    () => createTripStopDivIcon(photo, index, isCurrentReplay, isSelected),
+    [photo, index, isCurrentReplay, isSelected]
+  );
+
+  if (!photo?.location?.latitude || !photo?.location?.longitude) return null;
+
+  return (
+    <Marker
+      position={[photo.location.latitude, photo.location.longitude]}
+      icon={icon}
+      zIndexOffset={isCurrentReplay ? 1000 : 500}
+      eventHandlers={{
+        click: (e) => {
+          L.DomEvent.stopPropagation(e);
+          onClick(photo);
+        },
+      }}
+    />
+  );
+};
+
+export default PinPicClusterMarker;
