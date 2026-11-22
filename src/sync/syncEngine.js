@@ -69,6 +69,12 @@ export const syncEngine = {
       await syncEngine.bootstrapIfEmpty(userId);
       if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
 
+      // Purge any legacy downloadUrls from local IndexedDB to avoid stale expired links
+      await db.photos
+        .filter((p) => Boolean(p.downloadUrl))
+        .modify({ downloadUrl: undefined })
+        .catch(() => {});
+
       // Phase 1: Push phase
       await syncEngine.pushLocalChanges(deviceId);
       if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return false;
@@ -156,6 +162,7 @@ export const syncEngine = {
             // 2. Insert photos with proper cluster resolution
             const processedPhotoIds = new Set();
             const insertedClusterThumbnails = new Map(); // localCId -> first inserted localPhotoId
+            const bootstrapPhotoUrlMap = new Map(); // localPhotoId -> in-memory downloadUrl
 
             for (const p of cloudPhotos || []) {
               const pid = p.photoId || p.id;
@@ -186,8 +193,13 @@ export const syncEngine = {
                 editedAt: p.editedAt || new Date().toISOString(),
                 location: p.location || (globalCId ? clusterLocationMap.get(globalCId) : null) || null,
                 visibility: p.visibility || 'PUBLIC',
-                downloadUrl: p.downloadUrl || p.photoUrl || null,
+                fileBlob: null,
               });
+
+              const dlUrl = p.downloadUrl || p.photoUrl;
+              if (dlUrl) {
+                bootstrapPhotoUrlMap.set(localPhotoId, dlUrl);
+              }
 
               if (clusterLocalId && !insertedClusterThumbnails.has(clusterLocalId)) {
                 insertedClusterThumbnails.set(clusterLocalId, localPhotoId);
@@ -214,8 +226,12 @@ export const syncEngine = {
                       editedAt: p.editedAt || new Date().toISOString(),
                       location: p.location || c.location || null,
                       visibility: p.visibility || c.visibility || 'PUBLIC',
-                      downloadUrl: p.downloadUrl || p.photoUrl || null,
+                      fileBlob: null,
                     });
+                    const dlUrl = p.downloadUrl || p.photoUrl;
+                    if (dlUrl) {
+                      bootstrapPhotoUrlMap.set(localPhotoId, dlUrl);
+                    }
                     if (localCId && !insertedClusterThumbnails.has(localCId)) {
                       insertedClusterThumbnails.set(localCId, localPhotoId);
                     }
@@ -236,7 +252,7 @@ export const syncEngine = {
           notifyRepositoryChanged();
 
           // Background cache image blobs for bootstrapped photos into IndexedDB
-          syncEngine.cachePendingPhotosBlobs().catch((err) => {
+          syncEngine.cachePendingPhotosBlobs(bootstrapPhotoUrlMap).catch((err) => {
             console.warn('[SyncEngine] Background bootstrap blob caching error:', err);
           });
         }
@@ -599,7 +615,7 @@ export const syncEngine = {
               if (p.location) updates.location = p.location;
               if (p.visibility && existing.visibility !== p.visibility) updates.visibility = p.visibility;
               if (p.s3Key && existing.s3Key !== p.s3Key) updates.s3Key = p.s3Key;
-              if (p.downloadUrl && existing.downloadUrl !== p.downloadUrl) updates.downloadUrl = p.downloadUrl;
+              if (existing.downloadUrl) updates.downloadUrl = undefined;
               if (blob) {
                 updates.fileBlob = blob;
                 revokeBlobUrl(existing.localPhotoId);
@@ -621,7 +637,6 @@ export const syncEngine = {
                 editedAt: p.editedAt || new Date().toISOString(),
                 location: p.location || null,
                 visibility: p.visibility || 'PRIVATE',
-                downloadUrl: p.downloadUrl || null,
                 fileBlob: blob || null,
                 revision: p.revision,
               });
@@ -755,13 +770,22 @@ export const syncEngine = {
   /**
    * Phase 4: Download and cache image binary Blobs into IndexedDB (db.photos)
    * for any photos that were synced from the cloud but don't have fileBlob stored locally yet.
+   * Fetches fresh presigned URLs on demand via photoApi.getPresignedUrl(s3Key) or in-memory URLs.
+   * Ephemeral download URLs are NEVER permanently stored in IndexedDB.
    */
-  cachePendingPhotosBlobs: async () => {
+  cachePendingPhotosBlobs: async (inMemoryUrlMap = null) => {
     if (isSyncCancelled || !localStorage.getItem('pinpic_jwt_token')) return;
     try {
-      // Find active photos that have a downloadUrl but no local fileBlob
+      // Find active photos that have an s3Key (or in-memory / legacy URL) but no local fileBlob
       const unCachedPhotos = await db.photos
-        .filter((p) => !p.isDeleted && !p.fileBlob && Boolean(p.downloadUrl))
+        .filter(
+          (p) =>
+            !p.isDeleted &&
+            !p.fileBlob &&
+            (Boolean(p.s3Key) ||
+              Boolean(p.downloadUrl) ||
+              Boolean(inMemoryUrlMap?.has(p.localPhotoId) || inMemoryUrlMap?.has(p.globalPhotoId)))
+        )
         .toArray();
 
       if (unCachedPhotos.length === 0) return;
@@ -776,11 +800,37 @@ export const syncEngine = {
         const chunk = unCachedPhotos.slice(i, i + CONCURRENCY_LIMIT);
         await Promise.all(
           chunk.map(async (photo) => {
-            if (!photo.downloadUrl) return;
-            const blob = await downloadImageBlob(photo.downloadUrl);
+            let downloadUrl =
+              inMemoryUrlMap?.get(photo.localPhotoId) ||
+              inMemoryUrlMap?.get(photo.globalPhotoId) ||
+              null;
+
+            // If no in-memory URL, fetch a fresh, unexpired presigned URL from backend via s3Key
+            if (!downloadUrl && photo.s3Key) {
+              try {
+                downloadUrl = await photoApi.getPresignedUrl(photo.s3Key);
+              } catch (e) {
+                console.warn(`[SyncEngine] Could not get fresh presigned URL for photo ${photo.localPhotoId}:`, e);
+              }
+            }
+
+            // Fallback: legacy downloadUrl on record (if any)
+            if (!downloadUrl && photo.downloadUrl) {
+              downloadUrl = photo.downloadUrl;
+            }
+
+            if (!downloadUrl) return;
+
+            const blob = await downloadImageBlob(downloadUrl);
             if (blob) {
-              await db.photos.update(photo.localPhotoId, { fileBlob: blob });
+              await db.photos.update(photo.localPhotoId, {
+                fileBlob: blob,
+                downloadUrl: undefined, // ensure legacy downloadUrl is purged from DB
+              });
               cachedCount++;
+            } else if (photo.downloadUrl) {
+              // If legacy downloadUrl failed, purge it so it doesn't keep failing
+              await db.photos.update(photo.localPhotoId, { downloadUrl: undefined });
             }
           })
         );

@@ -58,10 +58,10 @@ export const resolvePhotoUrl = (photo) => {
       console.warn('Failed to create object URL from fileBlob:', err);
     }
   }
-  // 2. Fall back to remote downloadUrl if not yet cached in IndexedDB
-  if (photo.downloadUrl) return photo.downloadUrl;
-  // 3. Fall back to temporary previewUrl
-  return photo.previewUrl || null;
+  // 2. Fall back to temporary previewUrl (e.g. freshly selected file before save)
+  if (photo.previewUrl) return photo.previewUrl;
+  // 3. Fall back to temporary in-memory photoUrl or downloadUrl if provided
+  return photo.photoUrl || photo.downloadUrl || null;
 };
 
 export const localPhotoRepository = {
@@ -197,11 +197,14 @@ export const localPhotoRepository = {
     let localId;
 
     await db.transaction('rw', [db.photos, db.syncOperations], async () => {
+      const { downloadUrl, ...cleanData } = photoData || {};
       localId = await db.photos.add({
-        ...photoData,
-        visibility: photoData.visibility || 'PRIVATE',
-        takenAt: photoData.takenAt || now,
-        editedAt: photoData.editedAt || now,
+        ...cleanData,
+        fileBlob: cleanData.file || cleanData.fileBlob || null,
+        s3Key: cleanData.s3Key || null,
+        visibility: cleanData.visibility || 'PRIVATE',
+        takenAt: cleanData.takenAt || now,
+        editedAt: cleanData.editedAt || now,
       });
 
       await db.syncOperations.add({
@@ -295,8 +298,9 @@ export const localPhotoRepository = {
           editedAt: now,
           location,
           visibility,
-          fileBlob: p.file || null,
+          fileBlob: p.file || p.fileBlob || null,
           previewUrl: p.previewUrl || null,
+          s3Key: p.s3Key || null,
         });
 
         insertedPhotoIds.push(photoLocalId);
@@ -423,6 +427,7 @@ export const localPhotoRepository = {
               visibility,
               fileBlob: file,
               previewUrl,
+              s3Key: null,
             });
 
             await db.clusters.update(clusterId, { thumbnailId: photoId });
@@ -455,6 +460,7 @@ export const localPhotoRepository = {
               visibility,
               fileBlob: file,
               previewUrl,
+              s3Key: null,
             });
 
             await db.syncOperations.add({
