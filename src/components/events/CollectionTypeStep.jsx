@@ -7,7 +7,7 @@ export const COLLECTION_TYPES = [
     title: 'Trip',
     subtitle: 'Multi-day journey, day-by-day story & replay route on map',
     icon: Plane,
-    badge: 'Available Now',
+    badge: 'Multi-Day',
     available: true,
     color: 'text-pinpic-coral dark:text-pinpic-coral-dark',
     bgColor: 'bg-pinpic-coral/10 dark:bg-pinpic-coral-dark/10',
@@ -16,42 +16,46 @@ export const COLLECTION_TYPES = [
   {
     id: 'visit',
     title: 'Visit',
-    subtitle: 'Short spot exploration or single destination visit',
+    subtitle: 'A memory with people, earlier visits link & area focus (no path)',
     icon: MapPin,
-    badge: 'Coming Soon',
-    available: false,
+    badge: 'Destination',
+    available: true,
     color: 'text-pinpic-teal dark:text-pinpic-teal-dark',
     bgColor: 'bg-pinpic-teal/10 dark:bg-pinpic-teal-dark/10',
+    borderColor: 'border-pinpic-teal dark:border-pinpic-teal-dark',
   },
   {
     id: 'event',
     title: 'Event',
-    subtitle: 'Concerts, weddings, parties, or special occasions',
+    subtitle: 'Weddings, fests, birthdays grouped by time of day (morning, ceremony, evening)',
     icon: Calendar,
-    badge: 'Coming Soon',
-    available: false,
+    badge: 'Occasion',
+    available: true,
     color: 'text-purple-500 dark:text-purple-400',
     bgColor: 'bg-purple-500/10 dark:bg-purple-400/10',
+    borderColor: 'border-purple-500 dark:border-purple-400',
   },
   {
     id: 'day_out',
     title: 'Day Out',
-    subtitle: 'Single day adventure or city exploration with friends',
+    subtitle: 'Single day in the city with stops (cafe, mall, walk) and local route',
     icon: Sun,
-    badge: 'Coming Soon',
-    available: false,
+    badge: 'Single Day',
+    available: true,
     color: 'text-amber-500 dark:text-amber-400',
     bgColor: 'bg-amber-500/10 dark:bg-amber-400/10',
+    borderColor: 'border-amber-500 dark:border-amber-400',
   },
   {
     id: 'custom',
     title: 'Custom',
-    subtitle: 'Freeform grouping with your own story layout',
+    subtitle: 'Freeform collection from anywhere, any city or month (no route assumptions)',
     icon: Sparkles,
-    badge: 'Coming Soon',
-    available: false,
+    badge: 'Freeform',
+    available: true,
     color: 'text-blue-500 dark:text-blue-400',
     bgColor: 'bg-blue-500/10 dark:bg-blue-400/10',
+    borderColor: 'border-blue-500 dark:border-blue-400',
   },
 ];
 
@@ -63,7 +67,7 @@ export const CollectionTypeStep = ({ selectedType, onSelectType, onNext }) => {
           Select Collection Type
         </h3>
         <p className="text-xs text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark mt-1">
-          Choose the kind of experience you want to create from your photos.
+          Choose how you want your photos and map experience structured.
         </p>
       </div>
 
@@ -71,21 +75,14 @@ export const CollectionTypeStep = ({ selectedType, onSelectType, onNext }) => {
         {COLLECTION_TYPES.map((type) => {
           const Icon = type.icon;
           const isSelected = selectedType === type.id;
-          const isAvailable = type.available;
 
           return (
             <div
               key={type.id}
-              onClick={() => {
-                if (isAvailable) onSelectType(type.id);
-              }}
-              className={`relative flex items-center justify-between p-4 rounded-2xl border transition-all duration-200 select-none ${
-                isAvailable
-                  ? 'cursor-pointer hover:shadow-md'
-                  : 'cursor-not-allowed opacity-60'
-              } ${
+              onClick={() => onSelectType(type.id)}
+              className={`relative flex items-center justify-between p-3.5 sm:p-4 rounded-2xl border transition-all duration-200 cursor-pointer select-none hover:shadow-md ${
                 isSelected
-                  ? 'border-pinpic-coral dark:border-pinpic-coral-dark bg-pinpic-coral/5 dark:bg-pinpic-coral-dark/5 shadow-sm'
+                  ? 'border-pinpic-coral dark:border-pinpic-coral-dark bg-pinpic-coral/5 dark:bg-pinpic-coral-dark/5 shadow-sm ring-1 ring-pinpic-coral/20'
                   : 'border-pinpic-border-light dark:border-pinpic-outline-dark bg-pinpic-surface-light dark:bg-pinpic-surface-container-dark hover:border-pinpic-coral/50'
               }`}
             >
@@ -99,11 +96,7 @@ export const CollectionTypeStep = ({ selectedType, onSelectType, onNext }) => {
                       {type.title}
                     </span>
                     <span
-                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                        isAvailable
-                          ? 'bg-pinpic-coral/15 text-pinpic-coral dark:text-pinpic-coral-dark'
-                          : 'bg-black/5 dark:bg-white/10 text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark'
-                      }`}
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark"
                     >
                       {type.badge}
                     </span>

@@ -8,6 +8,7 @@ import {
   Plane,
   ChevronRight,
   Compass,
+  Sun,
   Image as ImageIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -132,16 +133,48 @@ export const EventsPage = () => {
                       />
                     ) : (
                       <div className="w-full h-full bg-gradient-to-br from-pinpic-coral to-pinpic-teal flex items-center justify-center text-3xl text-white">
-                        ✈️
+                        {item.type === 'visit'
+                          ? '📍'
+                          : item.type === 'event'
+                          ? '🎉'
+                          : item.type === 'day_out'
+                          ? '☀️'
+                          : item.type === 'custom'
+                          ? '✨'
+                          : '✈️'}
                       </div>
                     )}
 
                     {/* Gradient Overlay & Badges */}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-between p-4">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-pinpic-coral text-white shadow-sm flex items-center gap-1 backdrop-blur-sm">
-                          <Plane className="w-3 h-3" />
-                          <span className="capitalize">{item.type || 'Trip'}</span>
+                        <span
+                          className={`text-[11px] font-bold px-2.5 py-1 rounded-full text-white shadow-sm flex items-center gap-1 backdrop-blur-sm ${
+                            item.type === 'visit'
+                              ? 'bg-pinpic-teal'
+                              : item.type === 'event'
+                              ? 'bg-purple-600'
+                              : item.type === 'day_out'
+                              ? 'bg-amber-500'
+                              : item.type === 'custom'
+                              ? 'bg-blue-600'
+                              : 'bg-pinpic-coral'
+                          }`}
+                        >
+                          {item.type === 'visit' ? (
+                            <MapPin className="w-3 h-3" />
+                          ) : item.type === 'event' ? (
+                            <Calendar className="w-3 h-3" />
+                          ) : item.type === 'day_out' ? (
+                            <Sun className="w-3 h-3" />
+                          ) : item.type === 'custom' ? (
+                            <Sparkles className="w-3 h-3" />
+                          ) : (
+                            <Plane className="w-3 h-3" />
+                          )}
+                          <span className="capitalize">
+                            {item.type === 'day_out' ? 'Day Out' : item.type || 'Trip'}
+                          </span>
                         </span>
 
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-black/60 text-white backdrop-blur-sm">

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Polyline } from 'react-leaflet';
-import { Plus, Navigation, RefreshCw, X, Cloud, Plane, Play } from 'lucide-react';
+import { Plus, Navigation, RefreshCw, X, Cloud, Plane, Play, MapPin, Calendar, Sun, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { localPhotoRepository } from '../../data/localPhotoRepository';
@@ -491,53 +491,80 @@ export const MapPage = () => {
         )}
       </div>
 
-      {/* Active Trip Banner */}
-      {activeTrip && (
-        <div className="absolute top-4 right-4 sm:right-6 sm:max-w-md z-30 bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark rounded-full p-2 pl-4 pr-3 shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-top-4">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="w-8 h-8 rounded-full bg-pinpic-coral/15 text-pinpic-coral dark:text-pinpic-coral-dark flex items-center justify-center flex-shrink-0">
-              <Plane className="w-4 h-4" />
-            </span>
-            <div className="min-w-0">
-              <h3 className="font-extrabold text-xs sm:text-sm text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark truncate">
-                {activeTrip.title}
-              </h3>
-              <p className="text-[11px] text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark truncate">
-                {tripPhotosWithCoords.length} stops on map • Other pins faded
-              </p>
-            </div>
-          </div>
+      {/* Active Collection / Story Banner */}
+      {activeTrip && (() => {
+        const isRouteType = activeTrip.type === 'trip' || activeTrip.type === 'day_out';
+        const icon =
+          activeTrip.type === 'visit' ? (
+            <MapPin className="w-4 h-4 text-pinpic-teal dark:text-pinpic-teal-dark" />
+          ) : activeTrip.type === 'event' ? (
+            <Calendar className="w-4 h-4 text-purple-500" />
+          ) : activeTrip.type === 'day_out' ? (
+            <Sun className="w-4 h-4 text-amber-500" />
+          ) : activeTrip.type === 'custom' ? (
+            <Sparkles className="w-4 h-4 text-blue-500" />
+          ) : (
+            <Plane className="w-4 h-4 text-pinpic-coral dark:text-pinpic-coral-dark" />
+          );
 
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {!isReplaying && tripPhotosWithCoords.length > 0 && (
+        const subtext =
+          activeTrip.type === 'visit'
+            ? `${tripPhotosWithCoords.length} spots in area • Other pins faded`
+            : activeTrip.type === 'event'
+            ? `${tripPhotosWithCoords.length} venue pins • Other pins faded`
+            : activeTrip.type === 'day_out'
+            ? `${tripPhotosWithCoords.length} stops on city route • Other pins faded`
+            : activeTrip.type === 'custom'
+            ? `${tripPhotosWithCoords.length} collection pins • Other pins faded`
+            : `${tripPhotosWithCoords.length} stops on map • Other pins faded`;
+
+        return (
+          <div className="absolute top-4 right-4 sm:right-6 sm:max-w-md z-30 bg-pinpic-surface-light/95 dark:bg-pinpic-surface-container-dark/95 border border-pinpic-border-light dark:border-pinpic-outline-dark rounded-full p-2 pl-4 pr-3 shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in slide-in-from-top-4">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-8 h-8 rounded-full bg-black/5 dark:bg-white/10 flex items-center justify-center flex-shrink-0">
+                {icon}
+              </span>
+              <div className="min-w-0">
+                <h3 className="font-extrabold text-xs sm:text-sm text-pinpic-text-primary-light dark:text-pinpic-text-primary-dark truncate">
+                  {activeTrip.title}
+                </h3>
+                <p className="text-[11px] text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark truncate">
+                  {subtext}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {!isReplaying && isRouteType && tripPhotosWithCoords.length > 0 && (
+                <button
+                  onClick={() => {
+                    setIsReplaying(true);
+                    setReplayIndex(0);
+                    setIsReplayPlaying(true);
+                  }}
+                  className="px-3 py-1.5 rounded-full bg-pinpic-coral dark:bg-pinpic-coral-dark text-white font-bold text-xs flex items-center gap-1.5 shadow-sm hover:opacity-90 active:scale-95 transition-all"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span className="hidden sm:inline">Replay</span>
+                </button>
+              )}
+
               <button
                 onClick={() => {
-                  setIsReplaying(true);
-                  setReplayIndex(0);
-                  setIsReplayPlaying(true);
+                  setSearchParams({});
+                  setActiveTrip(null);
+                  setIsReplaying(false);
+                  setSelectedTripPhoto(null);
                 }}
-                className="px-3 py-1.5 rounded-full bg-pinpic-coral dark:bg-pinpic-coral-dark text-white font-bold text-xs flex items-center gap-1.5 shadow-sm hover:opacity-90 active:scale-95 transition-all"
+                className="p-1.5 rounded-full text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                aria-label="Exit Collection View"
               >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span className="hidden sm:inline">Replay</span>
+                <X className="w-4 h-4" />
               </button>
-            )}
-
-            <button
-              onClick={() => {
-                setSearchParams({});
-                setActiveTrip(null);
-                setIsReplaying(false);
-                setSelectedTripPhoto(null);
-              }}
-              className="p-1.5 rounded-full text-pinpic-text-secondary-light dark:text-pinpic-text-secondary-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-              aria-label="Exit Trip View"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Floating Action Controls on Map (Top Right) */}
       <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 pointer-events-auto">
@@ -604,20 +631,22 @@ export const MapPage = () => {
           />
         ))}
 
-        {/* Trip Path Polyline Connecting Stops in Chronological Order */}
-        {activeTrip && tripPathCoordinates.length > 1 && (
-          <Polyline
-            positions={tripPathCoordinates}
-            pathOptions={{
-              color: '#f56a41',
-              weight: 4,
-              opacity: 0.9,
-              dashArray: '8, 8',
-              lineCap: 'round',
-              lineJoin: 'round',
-            }}
-          />
-        )}
+        {/* Route Polyline Connecting Stops (Only for 'trip' and 'day_out' collections) */}
+        {activeTrip &&
+          (activeTrip.type === 'trip' || activeTrip.type === 'day_out') &&
+          tripPathCoordinates.length > 1 && (
+            <Polyline
+              positions={tripPathCoordinates}
+              pathOptions={{
+                color: activeTrip.type === 'day_out' ? '#f59e0b' : '#f56a41',
+                weight: 4,
+                opacity: 0.9,
+                dashArray: '8, 8',
+                lineCap: 'round',
+                lineJoin: 'round',
+              }}
+            />
+          )}
 
         {/* Trip Stop Markers with Chronological Badges */}
         {activeTrip &&

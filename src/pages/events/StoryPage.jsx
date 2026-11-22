@@ -2,6 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { localCollectionRepository } from '../../data/localCollectionRepository';
 import TripStoryLayout from './TripStoryLayout';
+import VisitStoryLayout from './VisitStoryLayout';
+import EventStoryLayout from './EventStoryLayout';
+import DayOutStoryLayout from './DayOutStoryLayout';
+import CustomStoryLayout from './CustomStoryLayout';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 
 export const StoryPage = () => {
@@ -46,8 +50,20 @@ export const StoryPage = () => {
 
   if (!collection) return null;
 
-  // Polymorphic dispatch based on type (currently Trip is primary)
-  return <TripStoryLayout collection={collection} onReload={fetchCollection} />;
+  // Polymorphic dispatch based on collection type
+  switch (collection.type) {
+    case 'visit':
+      return <VisitStoryLayout collection={collection} onReload={fetchCollection} />;
+    case 'event':
+      return <EventStoryLayout collection={collection} onReload={fetchCollection} />;
+    case 'day_out':
+      return <DayOutStoryLayout collection={collection} onReload={fetchCollection} />;
+    case 'custom':
+      return <CustomStoryLayout collection={collection} onReload={fetchCollection} />;
+    case 'trip':
+    default:
+      return <TripStoryLayout collection={collection} onReload={fetchCollection} />;
+  }
 };
 
 export default StoryPage;

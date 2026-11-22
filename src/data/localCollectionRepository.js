@@ -9,19 +9,178 @@ export const notifyCollectionChanged = () => {
   eventTarget.dispatchEvent(new Event(COLLECTION_CHANGE_EVENT));
 };
 
+/**
+ * Calculates Haversine distance in kilometers between two lat/lng coordinates
+ */
+export function haversineDistance(c1, c2) {
+  if (!c1 || !c2) return Infinity;
+  const lat1 = c1.lat ?? c1.latitude;
+  const lon1 = c1.lng ?? c1.lon ?? c1.longitude;
+  const lat2 = c2.lat ?? c2.latitude;
+  const lon2 = c2.lng ?? c2.lon ?? c2.longitude;
+
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return Infinity;
+
+  const R = 6371; // Earth radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Computes geographic centroid of a list of photos
+ */
+export function calculateCentroid(photos = []) {
+  const geo = photos.filter(
+    (p) => p.location?.latitude != null && p.location?.longitude != null
+  );
+  if (geo.length === 0) return null;
+  const latSum = geo.reduce((sum, p) => sum + p.location.latitude, 0);
+  const lngSum = geo.reduce((sum, p) => sum + p.location.longitude, 0);
+  return { lat: latSum / geo.length, lng: lngSum / geo.length };
+}
+
+/**
+ * Groups photos into Time of Day buckets for Event collection:
+ * - Morning: 05:00 - 11:59
+ * - Afternoon / Ceremony: 12:00 - 16:59
+ * - Evening: 17:00 - 20:59
+ * - Night / Party: 21:00 - 04:59
+ */
+export function groupPhotosByTimeOfDay(photos = [], customLabels = {}) {
+  const buckets = [
+    {
+      id: 'morning',
+      defaultLabel: 'Morning',
+      icon: '🌅',
+      timeRange: '5:00 AM – 11:59 AM',
+      photos: [],
+    },
+    {
+      id: 'afternoon',
+      defaultLabel: 'Afternoon / Ceremony',
+      icon: '☀️',
+      timeRange: '12:00 PM – 4:59 PM',
+      photos: [],
+    },
+    {
+      id: 'evening',
+      defaultLabel: 'Evening / Reception',
+      icon: '🌆',
+      timeRange: '5:00 PM – 8:59 PM',
+      photos: [],
+    },
+    {
+      id: 'night',
+      defaultLabel: 'Late Night / Party',
+      icon: '🌙',
+      timeRange: '9:00 PM – 4:59 AM',
+      photos: [],
+    },
+  ];
+
+  for (const p of photos) {
+    const d = p.takenAt ? new Date(p.takenAt) : new Date();
+    const hour = !isNaN(d.getTime()) ? d.getHours() : 12;
+
+    if (hour >= 5 && hour < 12) {
+      buckets[0].photos.push(p);
+    } else if (hour >= 12 && hour < 17) {
+      buckets[1].photos.push(p);
+    } else if (hour >= 17 && hour < 21) {
+      buckets[2].photos.push(p);
+    } else {
+      buckets[3].photos.push(p);
+    }
+  }
+
+  // Filter to only non-empty buckets and apply custom labels if user renamed them
+  return buckets
+    .filter((b) => b.photos.length > 0)
+    .map((b) => ({
+      ...b,
+      label: customLabels[b.id] || b.defaultLabel,
+    }));
+}
+
+/**
+ * Groups photos into stops for Day Out collection
+ * Based on temporal gap (> 45 mins) or spatial gap (> 400m)
+ */
+export function groupPhotosIntoStops(photos = [], customNames = {}) {
+  if (!photos || photos.length === 0) return [];
+
+  const sorted = [...photos].sort(
+    (a, b) => new Date(a.takenAt || 0) - new Date(b.takenAt || 0)
+  );
+  const rawStops = [];
+  let currentGroup = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    const photo = sorted[i];
+    if (currentGroup.length === 0) {
+      currentGroup.push(photo);
+      continue;
+    }
+
+    const prev = currentGroup[currentGroup.length - 1];
+    const prevTime = prev.takenAt ? new Date(prev.takenAt).getTime() : 0;
+    const currTime = photo.takenAt ? new Date(photo.takenAt).getTime() : 0;
+    const timeDiffMins = (currTime - prevTime) / (1000 * 60);
+
+    let distanceMeters = 0;
+    if (
+      prev.location?.latitude != null &&
+      prev.location?.longitude != null &&
+      photo.location?.latitude != null &&
+      photo.location?.longitude != null
+    ) {
+      distanceMeters = haversineDistance(prev.location, photo.location) * 1000;
+    }
+
+    // Split into new stop if gap > 45 mins or distance > 400m
+    if (timeDiffMins > 45 || distanceMeters > 400) {
+      rawStops.push(currentGroup);
+      currentGroup = [photo];
+    } else {
+      currentGroup.push(photo);
+    }
+  }
+  if (currentGroup.length > 0) rawStops.push(currentGroup);
+
+  return rawStops.map((group, idx) => {
+    const first = group[0];
+    const d = first.takenAt ? new Date(first.takenAt) : null;
+    const timeStr = d && !isNaN(d.getTime()) ? format(d, 'h:mm a') : '';
+    const defaultPlace =
+      first.location?.locationName || `Stop ${idx + 1}`;
+    const name = customNames[String(idx)] || defaultPlace;
+
+    return {
+      stopIndex: idx,
+      time: timeStr,
+      placeName: name,
+      defaultPlaceName: defaultPlace,
+      location: first.location || null,
+      photos: group,
+    };
+  });
+}
+
 export const localCollectionRepository = {
-  /**
-   * Subscribe to collection database mutations
-   */
   subscribe: (callback) => {
     const handler = () => callback();
     eventTarget.addEventListener(COLLECTION_CHANGE_EVENT, handler);
     return () => eventTarget.removeEventListener(COLLECTION_CHANGE_EVENT, handler);
   },
 
-  /**
-   * Helper to retrieve photo entities by array of photo IDs (local or global)
-   */
   getPhotosForIds: async (photoIds = []) => {
     if (!photoIds || photoIds.length === 0) return [];
 
@@ -56,9 +215,6 @@ export const localCollectionRepository = {
     return Array.from(map.values());
   },
 
-  /**
-   * Helper to fetch a single photo by ID
-   */
   getPhotoByIdHelper: async (photoId) => {
     if (!photoId) return null;
     const numId = Number(photoId);
@@ -82,7 +238,7 @@ export const localCollectionRepository = {
   },
 
   /**
-   * Create a new collection (e.g. trip)
+   * Create a new collection (trip, visit, event, day_out, custom)
    */
   createCollection: async ({
     type = 'trip',
@@ -91,19 +247,34 @@ export const localCollectionRepository = {
     coverPhotoId = null,
     photoIds = [],
     dayNotes = {},
+    whoWasThere = '',
+    eventDate = null,
+    timeBucketLabels = {},
+    stopNames = {},
+    sortOrder = 'newest',
   }) => {
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     const stringPhotoIds = photoIds.map(String);
 
+    // Compute geographic centroid for location-centric types (visit, trip, event)
+    const memberPhotos = await localCollectionRepository.getPhotosForIds(stringPhotoIds);
+    const centroid = calculateCentroid(memberPhotos);
+
     const collection = {
       id,
       type: type || 'trip',
-      title: title?.trim() || 'Untitled Trip',
+      title: title?.trim() || 'Untitled Collection',
       description: description?.trim() || '',
       coverPhotoId: coverPhotoId ? String(coverPhotoId) : (stringPhotoIds[0] || null),
       photoIds: stringPhotoIds,
       dayNotes: dayNotes || {},
+      whoWasThere: whoWasThere?.trim() || '',
+      centroid: centroid || null,
+      eventDate: eventDate || null,
+      timeBucketLabels: timeBucketLabels || {},
+      stopNames: stopNames || {},
+      sortOrder: sortOrder || 'newest',
       createdAt: now,
       updatedAt: now,
       isDeleted: false,
@@ -114,9 +285,6 @@ export const localCollectionRepository = {
     return collection;
   },
 
-  /**
-   * Retrieve all active collections enriched with cover photo & summary info
-   */
   getAllCollections: async () => {
     try {
       const raw = await db.collections.toArray();
@@ -132,7 +300,6 @@ export const localCollectionRepository = {
             coverPhoto = await localCollectionRepository.getPhotoByIdHelper(c.photoIds[0]);
           }
 
-          // Calculate date range from member photos
           const memberPhotos = await localCollectionRepository.getPhotosForIds(c.photoIds);
           const timestamps = memberPhotos
             .map((p) => (p.takenAt ? new Date(p.takenAt).getTime() : null))
@@ -161,8 +328,32 @@ export const localCollectionRepository = {
   },
 
   /**
-   * Retrieve single collection by ID with full chronological Day-by-Day grouping
+   * Find earlier visits within 5 km of the given centroid
    */
+  findEarlierVisits: async (currentCollectionId, centroid, currentTimestamp) => {
+    if (!centroid) return [];
+    try {
+      const all = await localCollectionRepository.getAllCollections();
+      const earlierVisits = all.filter((c) => {
+        if (c.id === currentCollectionId || c.type !== 'visit' || c.isDeleted) return false;
+        if (!c.centroid) return false;
+
+        const dist = haversineDistance(centroid, c.centroid);
+        if (dist > 5.0) return false; // Within 5 km
+
+        // Must be earlier than the current visit
+        const cTime = new Date(c.startDate || c.createdAt).getTime();
+        const curTime = new Date(currentTimestamp || Date.now()).getTime();
+        return cTime < curTime;
+      });
+
+      return earlierVisits;
+    } catch (err) {
+      console.error('Error in findEarlierVisits:', err);
+      return [];
+    }
+  },
+
   getCollectionById: async (id) => {
     try {
       if (!id) return null;
@@ -170,10 +361,17 @@ export const localCollectionRepository = {
       if (!collection || collection.isDeleted) return null;
 
       // Fetch member photos
-      const photos = await localCollectionRepository.getPhotosForIds(collection.photoIds);
+      let photos = await localCollectionRepository.getPhotosForIds(collection.photoIds);
 
-      // Sort photos chronologically in time order (ascending)
-      photos.sort((a, b) => new Date(a.takenAt || 0) - new Date(b.takenAt || 0));
+      // Sort photos chronologically by default
+      if (collection.sortOrder === 'oldest') {
+        photos.sort((a, b) => new Date(a.takenAt || 0) - new Date(b.takenAt || 0));
+      } else if (collection.sortOrder === 'newest') {
+        photos.sort((a, b) => new Date(b.takenAt || 0) - new Date(a.takenAt || 0));
+      } else {
+        // Default chronological order for trip, visit, event, day_out
+        photos.sort((a, b) => new Date(a.takenAt || 0) - new Date(b.takenAt || 0));
+      }
 
       // Resolve cover photo
       let coverPhoto = null;
@@ -188,7 +386,18 @@ export const localCollectionRepository = {
         coverPhoto = photos[0];
       }
 
-      // Group photos into Day 1, Day 2, Day 3...
+      const timestamps = photos
+        .map((p) => (p.takenAt ? new Date(p.takenAt).getTime() : null))
+        .filter((t) => t != null && !isNaN(t))
+        .sort((a, b) => a - b);
+
+      const startDate = timestamps.length > 0 ? new Date(timestamps[0]).toISOString() : collection.createdAt;
+      const endDate = timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1]).toISOString() : collection.createdAt;
+
+      // Calculate centroid if missing
+      const centroid = collection.centroid || calculateCentroid(photos);
+
+      // 1. Trip Day grouping
       const daysMap = new Map();
       for (const p of photos) {
         const dateObj = p.takenAt ? new Date(p.takenAt) : new Date(collection.createdAt);
@@ -225,19 +434,37 @@ export const localCollectionRepository = {
         };
       });
 
-      const timestamps = photos
-        .map((p) => (p.takenAt ? new Date(p.takenAt).getTime() : null))
-        .filter((t) => t != null && !isNaN(t))
-        .sort((a, b) => a - b);
+      // 2. Visit: Query earlier visits within 5km
+      let earlierVisits = [];
+      if (collection.type === 'visit' && centroid) {
+        earlierVisits = await localCollectionRepository.findEarlierVisits(
+          collection.id,
+          centroid,
+          startDate
+        );
+      }
 
-      const startDate = timestamps.length > 0 ? new Date(timestamps[0]).toISOString() : collection.createdAt;
-      const endDate = timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1]).toISOString() : collection.createdAt;
+      // 3. Event: Group by Time of Day
+      const timeBuckets =
+        collection.type === 'event'
+          ? groupPhotosByTimeOfDay(photos, collection.timeBucketLabels || {})
+          : [];
+
+      // 4. Day Out: Group into stops
+      const stops =
+        collection.type === 'day_out'
+          ? groupPhotosIntoStops(photos, collection.stopNames || {})
+          : [];
 
       return {
         ...collection,
         photos,
         coverPhoto,
         days,
+        earlierVisits,
+        timeBuckets,
+        stops,
+        centroid,
         photoCount: photos.length,
         startDate,
         endDate,
@@ -249,9 +476,6 @@ export const localCollectionRepository = {
     }
   },
 
-  /**
-   * Update or add a day note in a collection
-   */
   updateDayNote: async (collectionId, dayKey, note) => {
     const collection = await db.collections.get(collectionId);
     if (!collection) return;
@@ -264,9 +488,6 @@ export const localCollectionRepository = {
     notifyCollectionChanged();
   },
 
-  /**
-   * Remove a photo from a collection without deleting the photo itself
-   */
   removePhotoFromCollection: async (collectionId, photoId) => {
     const collection = await db.collections.get(collectionId);
     if (!collection) return;
@@ -287,11 +508,33 @@ export const localCollectionRepository = {
     notifyCollectionChanged();
   },
 
-  /**
-   * Delete a collection.
-   * If deletePhotos is true, deletes all photos in the collection from local db.
-   * Otherwise (default), keeps photos in the database and only deletes the collection record.
-   */
+  addPhotosToCollection: async (collectionId, newPhotoIds = []) => {
+    const collection = await db.collections.get(collectionId);
+    if (!collection) return;
+
+    const currentSet = new Set((collection.photoIds || []).map(String));
+    newPhotoIds.forEach((id) => currentSet.add(String(id)));
+
+    const updatedPhotoIds = Array.from(currentSet);
+    const memberPhotos = await localCollectionRepository.getPhotosForIds(updatedPhotoIds);
+    const centroid = calculateCentroid(memberPhotos);
+
+    await db.collections.update(collectionId, {
+      photoIds: updatedPhotoIds,
+      centroid: centroid || collection.centroid || null,
+      updatedAt: new Date().toISOString(),
+    });
+    notifyCollectionChanged();
+  },
+
+  updateCollectionMetadata: async (collectionId, updates = {}) => {
+    await db.collections.update(collectionId, {
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    });
+    notifyCollectionChanged();
+  },
+
   deleteCollection: async (collectionId, deletePhotos = false) => {
     const collection = await db.collections.get(collectionId);
     if (!collection) return;
@@ -308,9 +551,6 @@ export const localCollectionRepository = {
     notifyCollectionChanged();
   },
 
-  /**
-   * Update collection metadata (title, description, coverPhotoId)
-   */
   updateCollection: async (collectionId, updates) => {
     await db.collections.update(collectionId, {
       ...updates,
